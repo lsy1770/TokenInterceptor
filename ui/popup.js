@@ -1,0 +1,566 @@
+'use strict';
+
+const $ = id => document.getElementById(id);
+let openAITokens = [];
+let previousOpenAICount = 0;
+let currentClaudeToken = null;
+let claudeTokensRevealed = false;
+let currentAntigravityToken = null;
+let antigravityTokensRevealed = false;
+let openAIPollTimer = null;
+let toastTimer = null;
+
+function send(type, payload = {}) {
+  return new Promise(resolve => {
+    chrome.runtime.sendMessage({ type, ...payload }, response => {
+      if (chrome.runtime.lastError) {
+        resolve({ ok: false, error: chrome.runtime.lastError.message });
+        return;
+      }
+      resolve(response || { ok: false, error: '后台未返回结果' });
+    });
+  });
+}
+
+function showToast(message) {
+  const toast = $('toast');
+  toast.textContent = message;
+  toast.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove('show'), 2300);
+}
+
+async function copyText(value, successMessage) {
+  if (!value) return;
+  await navigator.clipboard.writeText(value);
+  showToast(successMessage);
+}
+
+function setButtonBusy(button, busy, busyText, idleText) {
+  button.disabled = busy;
+  button.textContent = busy ? busyText : idleText;
+}
+
+// Platform navigation
+function selectPlatform(platform) {
+  document.body.dataset.platform = platform;
+  document.querySelectorAll('.platform-button').forEach(button => {
+    button.classList.toggle('active', button.dataset.platform === platform);
+  });
+  document.querySelectorAll('.platform-panel').forEach(panel => {
+    panel.classList.toggle('active', panel.id === `platform-${platform}`);
+  });
+  void chrome.storage.local.set({ selectedPlatform: platform });
+  if (platform === 'claude') void refreshClaudeState();
+  if (platform === 'antigravity') void refreshAntigravityState();
+}
+
+document.querySelectorAll('.platform-button').forEach(button => {
+  button.addEventListener('click', () => selectPlatform(button.dataset.platform));
+});
+
+document.querySelectorAll('.subtab').forEach(button => {
+  button.addEventListener('click', () => {
+    document.querySelectorAll('.subtab').forEach(item => item.classList.remove('active'));
+    document.querySelectorAll('.subtab-panel').forEach(panel => panel.classList.remove('active'));
+    button.classList.add('active');
+    $(`openai-tab-${button.dataset.tab}`).classList.add('active');
+  });
+});
+
+// OpenAI flow
+function setOpenAIStep(step) {
+  for (let index = 1; index <= 4; index += 1) {
+    const element = $(`openaiStep${index}`);
+    element.classList.toggle('done', index < step);
+    element.classList.toggle('active', index === step);
+  }
+}
+
+async function syncOpenAIVerifier() {
+  const response = await send('GET_VERIFIER');
+  if (response.ok && response.verifier && !$('openaiVerifier').value) {
+    $('openaiVerifier').value = response.verifier;
+  }
+}
+
+function showOpenAIURL(url, opened) {
+  $('openaiURL').value = url;
+  $('openaiURLPanel').hidden = false;
+  $('openaiURLStatus').textContent = opened ? '等待授权' : '已生成';
+  void syncOpenAIVerifier();
+}
+
+async function initializeOpenAIURL() {
+  const response = await send('GET_AUTH_URL');
+  if (response.ok && response.url) {
+    showOpenAIURL(response.url, false);
+    setOpenAIStep(1);
+  }
+}
+
+function startOpenAIPolling() {
+  clearInterval(openAIPollTimer);
+  setOpenAIStep(3);
+  let polls = 0;
+  openAIPollTimer = setInterval(async () => {
+    polls += 1;
+    const delta = await loadOpenAITokens();
+    if (delta > 0) {
+      clearInterval(openAIPollTimer);
+      openAIPollTimer = null;
+      setOpenAIStep(4);
+      $('openaiStatus').textContent = '已完成';
+      $('openaiStart').textContent = '再次发起授权';
+      showToast('OpenAI Token 获取成功');
+    } else if (polls >= 180) {
+      clearInterval(openAIPollTimer);
+      openAIPollTimer = null;
+      $('openaiStatus').textContent = '已超时';
+      $('openaiStart').textContent = '重新发起授权';
+      showToast('等待回调超时，请重新发起');
+    }
+  }, 1000);
+}
+
+$('openaiStart').addEventListener('click', async () => {
+  const button = $('openaiStart');
+  setButtonBusy(button, true, '正在生成...', '生成并打开授权 URL');
+  const response = await send('START_AUTH');
+  setButtonBusy(button, false, '', response.ok ? '授权页已打开' : '重新发起授权');
+  if (!response.ok) {
+    showToast(`发起失败：${response.error || '未知错误'}`);
+    return;
+  }
+  showOpenAIURL(response.url, true);
+  setOpenAIStep(2);
+  $('openaiStatus').textContent = '等待回调';
+  startOpenAIPolling();
+});
+
+$('openaiOpenURL').addEventListener('click', async () => {
+  const response = await send('OPEN_URL', { url: $('openaiURL').value });
+  if (!response.ok) return showToast(`打开失败：${response.error}`);
+  $('openaiURLStatus').textContent = '等待授权';
+  $('openaiStatus').textContent = '等待回调';
+  setOpenAIStep(2);
+  startOpenAIPolling();
+});
+
+$('openaiCopyURL').addEventListener('click', () => copyText($('openaiURL').value, 'OpenAI 授权 URL 已复制'));
+
+$('openaiRegenerate').addEventListener('click', async () => {
+  if (!confirm('重新生成会使当前授权 URL 失效，确定继续吗？')) return;
+  const response = await send('GET_AUTH_URL', { forceNew: true });
+  if (!response.ok) return showToast(`生成失败：${response.error}`);
+  showOpenAIURL(response.url, false);
+  setOpenAIStep(1);
+  $('openaiStatus').textContent = '就绪';
+  showToast('已生成新的 OpenAI 授权 URL');
+});
+
+function escapeHTML(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function tokenField(label, value) {
+  if (!value) return '';
+  return `<div class="token-row"><div class="token-row-label"><span>${label}</span><span>点击复制</span></div>`
+    + `<div class="token-value" data-token-value="${encodeURIComponent(value)}">${escapeHTML(value)}</div></div>`;
+}
+
+const ICON = {
+  empty: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'
+    + '<rect x="3.5" y="10.5" width="17" height="10.5" rx="2.5"/><path d="M7.5 10.5V7a4.5 4.5 0 0 1 9 0v3.5"/></svg>',
+  copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'
+    + '<rect x="9" y="9" width="11.5" height="11.5" rx="2.5"/><path d="M5.5 15H4.8A1.3 1.3 0 0 1 3.5 13.7V4.8A1.3 1.3 0 0 1 4.8 3.5h8.9A1.3 1.3 0 0 1 15 4.8v.7"/></svg>',
+  download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'
+    + '<path d="M12 3.5v11m0 0 4-4m-4 4-4-4"/><path d="M4 16v2.5A2 2 0 0 0 6 20.5h12a2 2 0 0 0 2-2V16"/></svg>'
+};
+
+function renderOpenAITokens(tokens) {
+  if (!tokens.length) {
+    $('tokenList').innerHTML = `<div class="empty-state"><span class="empty-mark">${ICON.empty}</span>`
+      + '<strong>尚无 Token</strong><p>从上方发起 OpenAI 授权后会显示在这里</p></div>';
+    return;
+  }
+
+  const sources = {
+    auto_callback: '自动回调',
+    manual: '手动换取',
+    page_capture: '页面捕获',
+    session_import: 'Session 导入'
+  };
+  $('tokenList').innerHTML = tokens.map((token, index) => {
+    const capturedAt = token.capturedAt ? new Date(token.capturedAt).toLocaleString('zh-CN') : '-';
+    const hours = token.expires_in ? `${Math.round(token.expires_in / 3600)}h` : '未知时长';
+    const scopes = String(token.scope || '').split(' ').filter(Boolean)
+      .map(scope => `<span>${escapeHTML(scope)}</span>`).join('');
+    return `<article class="token-card"><header class="token-card-header">`
+      + `<span class="token-index">${index + 1}</span><div class="token-card-title">`
+      + `<strong>${escapeHTML(sources[token.source] || token.source || 'OpenAI Token')}</strong>`
+      + `<small>${escapeHTML(capturedAt)} · ${hours}</small></div>`
+      + `<button class="icon-button" data-copy-openai="${index}" type="button" title="复制全部字段">${ICON.copy}</button>`
+      + `<button class="icon-button" data-export-openai="${index}" type="button" title="导出 TXT">${ICON.download}</button></header>`
+      + `<div class="token-fields">${tokenField('access_token', token.access_token)}`
+      + `${tokenField('refresh_token', token.refresh_token)}${tokenField('id_token', token.id_token)}`
+      + `${scopes ? `<div class="token-row"><div class="token-row-label"><span>scope</span></div><div class="scope-list">${scopes}</div></div>` : ''}`
+      + '</div></article>';
+  }).join('');
+}
+
+async function loadOpenAITokens() {
+  const response = await send('GET_TOKENS');
+  if (!response.ok) return 0;
+  openAITokens = response.tokens || [];
+  $('tokenCount').textContent = openAITokens.length;
+  renderOpenAITokens(openAITokens);
+  $('pendingCodePanel').hidden = !response.pendingCode;
+  $('pendingCode').textContent = response.pendingCode || '';
+  if (response.pendingCode && !$('openaiCode').value) $('openaiCode').value = response.pendingCode;
+  if (response.pendingVerifier && !$('openaiVerifier').value) $('openaiVerifier').value = response.pendingVerifier;
+  const delta = Math.max(0, openAITokens.length - previousOpenAICount);
+  previousOpenAICount = openAITokens.length;
+  return delta;
+}
+
+function formatOpenAIToken(token, index) {
+  return [
+    '='.repeat(64),
+    `# OpenAI Token ${index + 1} · ${token.capturedAt || '-'} · ${token.source || '-'}`,
+    '='.repeat(64),
+    '', '[access_token]', token.access_token || '',
+    '', '[refresh_token]', token.refresh_token || '',
+    '', '[id_token]', token.id_token || '',
+    '', '[token_type]', token.token_type || 'bearer',
+    '', '[scope]', token.scope || '', ''
+  ].join('\n');
+}
+
+function download(content, filename, type) {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+$('tokenList').addEventListener('click', event => {
+  const valueElement = event.target.closest('[data-token-value]');
+  if (valueElement) {
+    void copyText(decodeURIComponent(valueElement.dataset.tokenValue), 'Token 字段已复制');
+    return;
+  }
+  const copyButton = event.target.closest('[data-copy-openai]');
+  if (copyButton) {
+    const index = Number(copyButton.dataset.copyOpenai);
+    void copyText(formatOpenAIToken(openAITokens[index], index), 'OpenAI Token 已复制');
+    return;
+  }
+  const exportButton = event.target.closest('[data-export-openai]');
+  if (exportButton) {
+    const index = Number(exportButton.dataset.exportOpenai);
+    download(formatOpenAIToken(openAITokens[index], index), `openai_token_${Date.now()}.txt`, 'text/plain');
+  }
+});
+
+$('exportOpenAITxt').addEventListener('click', () => {
+  if (!openAITokens.length) return showToast('暂无 OpenAI Token');
+  download(openAITokens.map(formatOpenAIToken).join('\n'), `openai_tokens_${Date.now()}.txt`, 'text/plain');
+});
+$('exportOpenAIJson').addEventListener('click', () => {
+  if (!openAITokens.length) return showToast('暂无 OpenAI Token');
+  download(JSON.stringify(openAITokens, null, 2), `openai_tokens_${Date.now()}.json`, 'application/json');
+});
+$('clearOpenAI').addEventListener('click', async () => {
+  if (!confirm('确认清除全部 OpenAI Token 记录吗？')) return;
+  const response = await send('CLEAR_TOKENS');
+  if (!response.ok) return showToast(`清除失败：${response.error}`);
+  openAITokens = [];
+  previousOpenAICount = 0;
+  $('tokenCount').textContent = '0';
+  renderOpenAITokens([]);
+  setOpenAIStep(0);
+  $('openaiStatus').textContent = '就绪';
+  showToast('OpenAI Token 已清除');
+});
+
+$('pendingCodePanel').addEventListener('click', () => copyText($('pendingCode').textContent, '授权码已复制'));
+$('openaiManualExchange').addEventListener('click', async () => {
+  const code = $('openaiCode').value.trim();
+  const verifier = $('openaiVerifier').value.trim();
+  if (!code || !verifier) return showToast('Authorization Code 和 Code Verifier 均为必填');
+  const button = $('openaiManualExchange');
+  setButtonBusy(button, true, '正在换取...', '手动换取 Token');
+  const response = await send('MANUAL_EXCHANGE', { code, verifier });
+  setButtonBusy(button, false, '', '手动换取 Token');
+  if (!response.ok) return showToast(`换取失败：${response.error}`);
+  await send('CLEAR_PENDING');
+  await loadOpenAITokens();
+  document.querySelector('.subtab[data-tab="tokens"]').click();
+  showToast('OpenAI Token 换取成功');
+});
+
+$('importSession').addEventListener('click', async () => {
+  const payload = $('sessionPayload').value.trim();
+  if (!payload) return showToast('请粘贴 Session JSON 或 sessionToken');
+  const button = $('importSession');
+  const status = $('sessionStatus');
+  setButtonBusy(button, true, '正在导入...', '导入并登录');
+  status.textContent = '正在写入 chatgpt.com Cookie...';
+  const response = await send('IMPORT_CHATGPT_SESSION', {
+    payload,
+    openChatGPT: $('openChatGPTAfterImport').checked
+  });
+  setButtonBusy(button, false, '', '导入并登录');
+  if (!response.ok) {
+    status.textContent = response.error || '导入失败';
+    status.style.color = 'var(--danger)';
+    return showToast(`导入失败：${response.error}`);
+  }
+  const details = [response.email, response.planType, response.expiresAt
+    ? `有效至 ${new Date(response.expiresAt).toLocaleString('zh-CN')}` : ''].filter(Boolean);
+  status.textContent = `导入成功${details.length ? ` · ${details.join(' · ')}` : ''}`;
+  status.style.color = 'var(--success)';
+  $('openaiStatus').textContent = 'Session 已导入';
+  if (response.accessTokenStored) await loadOpenAITokens();
+  showToast('ChatGPT Session 已导入');
+});
+
+// Claude flow
+function formatTime(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString('zh-CN', { hour12: false });
+}
+
+function renderClaudeState(state) {
+  const active = Boolean(state.captureActive);
+  const exchanging = Boolean(state.oauthExchangeInProgress);
+  const pending = Boolean(state.oauthCodeVerifier && state.oauthState);
+  currentClaudeToken = state.capturedToken || null;
+  $('claudeStateDot').className = 'state-dot';
+
+  if (currentClaudeToken) {
+    $('claudeStateDot').classList.add('success');
+    $('claudeStatusTitle').textContent = 'Token 已捕获';
+    $('claudeStatusDetail').textContent = '捕获已停止，Token 仅保存在本次浏览器会话。';
+  } else if (exchanging) {
+    $('claudeStateDot').classList.add('active');
+    $('claudeStatusTitle').textContent = '正在交换 Token';
+    $('claudeStatusDetail').textContent = '已识别 authorization code，正在请求 Claude Token 端点。';
+  } else if (active) {
+    $('claudeStateDot').classList.add('active');
+    $('claudeStatusTitle').textContent = '正在监听 Claude';
+    $('claudeStatusDetail').textContent = '请在 Claude 标签页完成 OAuth 请求。';
+  } else if (pending) {
+    $('claudeStateDot').classList.add('active');
+    $('claudeStatusTitle').textContent = '等待 Claude 授权回调';
+    $('claudeStatusDetail').textContent = '完成官方页面授权后将自动交换 Token。';
+  } else {
+    $('claudeStatusTitle').textContent = '未开始';
+    $('claudeStatusDetail').textContent = '生成授权 URL，或监听已有 Claude Token 请求。';
+  }
+
+  $('claudeOpenAuth').disabled = exchanging;
+  $('claudeExchange').disabled = exchanging;
+  $('claudeListen').disabled = active;
+  $('claudeStop').disabled = !active;
+  $('claudeURLPanel').hidden = !state.oauthAuthorizeURL;
+  $('claudeURL').value = state.oauthAuthorizeURL || '';
+  $('claudeTokenPanel').hidden = !currentClaudeToken;
+  $('claudeError').hidden = !state.captureError;
+  $('claudeError').textContent = state.captureError || '';
+
+  if (currentClaudeToken) {
+    $('claudeAccessToken').value = currentClaudeToken.access_token || '';
+    $('claudeRefreshToken').value = currentClaudeToken.refresh_token || '';
+    $('claudeExpires').textContent = currentClaudeToken.expires_in ? `${currentClaudeToken.expires_in} 秒` : '-';
+    $('claudeCapturedAt').textContent = formatTime(currentClaudeToken.captured_at);
+  }
+}
+
+async function refreshClaudeState() {
+  const response = await send('CLAUDE_GET_STATE');
+  if (!response.ok) {
+    $('claudeError').hidden = false;
+    $('claudeError').textContent = response.error || '读取 Claude 状态失败';
+    return;
+  }
+  renderClaudeState(response.state);
+}
+
+$('claudeOpenAuth').addEventListener('click', async () => {
+  const button = $('claudeOpenAuth');
+  setButtonBusy(button, true, '正在生成...', '生成并打开授权 URL');
+  const response = await send('CLAUDE_GENERATE_AUTH');
+  setButtonBusy(button, false, '', '生成并打开授权 URL');
+  await refreshClaudeState();
+  if (!response.ok) showToast(`Claude 授权失败：${response.error}`);
+});
+$('claudeCopyURL').addEventListener('click', () => copyText($('claudeURL').value, 'Claude 授权 URL 已复制'));
+$('claudeExchange').addEventListener('click', async () => {
+  const value = $('claudeCode').value.trim();
+  if (!value) return showToast('请粘贴 Claude authorization code 或回调 URL');
+  const response = await send('CLAUDE_EXCHANGE', { value });
+  await refreshClaudeState();
+  showToast(response.ok ? 'Claude Token 交换成功' : `交换失败：${response.error}`);
+});
+$('claudeListen').addEventListener('click', async () => {
+  const response = await send('CLAUDE_CAPTURE_START');
+  await refreshClaudeState();
+  showToast(response.ok ? 'Claude 请求监听已启动' : `监听失败：${response.error}`);
+});
+$('claudeStop').addEventListener('click', async () => {
+  await send('CLAUDE_CAPTURE_STOP');
+  await refreshClaudeState();
+});
+$('claudeReveal').addEventListener('click', () => {
+  claudeTokensRevealed = !claudeTokensRevealed;
+  const type = claudeTokensRevealed ? 'text' : 'password';
+  $('claudeAccessToken').type = type;
+  $('claudeRefreshToken').type = type;
+  $('claudeReveal').textContent = claudeTokensRevealed ? '隐藏 Token' : '显示 Token';
+});
+$('claudeCopy').addEventListener('click', () => {
+  if (currentClaudeToken) void copyText(JSON.stringify(currentClaudeToken, null, 2), 'Claude Token JSON 已复制');
+});
+$('claudeClear').addEventListener('click', async () => {
+  await send('CLAUDE_CLEAR');
+  currentClaudeToken = null;
+  claudeTokensRevealed = false;
+  $('claudeAccessToken').type = 'password';
+  $('claudeRefreshToken').type = 'password';
+  $('claudeReveal').textContent = '显示 Token';
+  await refreshClaudeState();
+  showToast('Claude 会话数据已清除');
+});
+
+// Antigravity flow
+function renderAntigravityState(state) {
+  currentAntigravityToken = state.capturedToken || null;
+  $('antigravityStateDot').className = 'state-dot';
+
+  if (currentAntigravityToken) {
+    $('antigravityStateDot').classList.add('success');
+    $('antigravityStatusTitle').textContent = 'Token 已获取';
+    $('antigravityStatusDetail').textContent = '凭据仅保存在本次浏览器会话，可复制 JSON 导出。';
+  } else if (state.exchanging) {
+    $('antigravityStateDot').classList.add('active');
+    $('antigravityStatusTitle').textContent = '正在交换 Token';
+    $('antigravityStatusDetail').textContent = '正在请求 Google OAuth Token 端点。';
+  } else if (state.oauthPending) {
+    $('antigravityStateDot').classList.add('active');
+    $('antigravityStatusTitle').textContent = '等待 Google 授权回调';
+    $('antigravityStatusDetail').textContent = '回调到 localhost:1456 后将自动完成 Token 交换。';
+  } else {
+    $('antigravityStatusTitle').textContent = '未开始';
+    $('antigravityStatusDetail').textContent = '点击按钮生成 Google 授权 URL。';
+  }
+
+  $('antigravityOpenAuth').disabled = state.exchanging;
+  $('antigravityExchange').disabled = state.exchanging;
+  $('antigravityURLPanel').hidden = !state.oauthAuthorizeURL;
+  $('antigravityURL').value = state.oauthAuthorizeURL || '';
+  $('antigravityTokenPanel').hidden = !currentAntigravityToken;
+  $('antigravityError').hidden = !state.error;
+  $('antigravityError').textContent = state.error || '';
+
+  if (currentAntigravityToken) {
+    $('antigravityEmail').textContent = currentAntigravityToken.email || '-';
+    $('antigravityName').textContent = currentAntigravityToken.name || '-';
+    $('antigravityAccessToken').value = currentAntigravityToken.access_token || '';
+    $('antigravityRefreshToken').value = currentAntigravityToken.refresh_token || '';
+    $('antigravityIDToken').value = currentAntigravityToken.id_token || '';
+    $('antigravityExpires').textContent = currentAntigravityToken.expires_in
+      ? `${currentAntigravityToken.expires_in} 秒`
+      : '-';
+    $('antigravityCapturedAt').textContent = formatTime(currentAntigravityToken.captured_at);
+  }
+}
+
+async function refreshAntigravityState() {
+  const response = await send('ANTIGRAVITY_GET_STATE');
+  if (!response.ok) {
+    $('antigravityError').hidden = false;
+    $('antigravityError').textContent = response.error || '读取 Antigravity 状态失败';
+    return;
+  }
+  renderAntigravityState(response.state);
+}
+
+$('antigravityOpenAuth').addEventListener('click', async () => {
+  const button = $('antigravityOpenAuth');
+  setButtonBusy(button, true, '正在生成...', '生成并打开授权 URL');
+  const response = await send('ANTIGRAVITY_GENERATE_AUTH');
+  setButtonBusy(button, false, '', '生成并打开授权 URL');
+  await refreshAntigravityState();
+  showToast(response.ok ? 'Antigravity 授权页已打开' : `生成失败：${response.error}`);
+});
+
+$('antigravityCopyURL').addEventListener('click', () => (
+  copyText($('antigravityURL').value, 'Antigravity 授权 URL 已复制')
+));
+
+$('antigravityExchange').addEventListener('click', async () => {
+  const value = $('antigravityCode').value.trim();
+  if (!value) return showToast('请粘贴 Antigravity authorization code 或回调 URL');
+  const response = await send('ANTIGRAVITY_EXCHANGE', { value });
+  await refreshAntigravityState();
+  showToast(response.ok ? 'Antigravity Token 交换成功' : `交换失败：${response.error}`);
+});
+
+$('antigravityReveal').addEventListener('click', () => {
+  antigravityTokensRevealed = !antigravityTokensRevealed;
+  const type = antigravityTokensRevealed ? 'text' : 'password';
+  $('antigravityAccessToken').type = type;
+  $('antigravityRefreshToken').type = type;
+  $('antigravityIDToken').type = type;
+  $('antigravityReveal').textContent = antigravityTokensRevealed ? '隐藏 Token' : '显示 Token';
+});
+
+$('antigravityCopy').addEventListener('click', () => {
+  if (currentAntigravityToken) {
+    void copyText(JSON.stringify(currentAntigravityToken, null, 2), 'Antigravity Token JSON 已复制');
+  }
+});
+
+$('antigravityClear').addEventListener('click', async () => {
+  await send('ANTIGRAVITY_CLEAR');
+  currentAntigravityToken = null;
+  antigravityTokensRevealed = false;
+  $('antigravityAccessToken').type = 'password';
+  $('antigravityRefreshToken').type = 'password';
+  $('antigravityIDToken').type = 'password';
+  $('antigravityReveal').textContent = '显示 Token';
+  await refreshAntigravityState();
+  showToast('Antigravity 会话数据已清除');
+});
+
+chrome.storage.onChanged.addListener((_changes, areaName) => {
+  if (areaName === 'session') {
+    void refreshClaudeState();
+    void refreshAntigravityState();
+  }
+});
+
+async function initialize() {
+  const stored = await chrome.storage.local.get('selectedPlatform');
+  const validPlatforms = new Set(['openai', 'claude', 'antigravity']);
+  selectPlatform(validPlatforms.has(stored.selectedPlatform) ? stored.selectedPlatform : 'openai');
+  await Promise.all([
+    initializeOpenAIURL(),
+    loadOpenAITokens(),
+    refreshClaudeState(),
+    refreshAntigravityState()
+  ]);
+  setInterval(loadOpenAITokens, 2000);
+}
+
+void initialize();

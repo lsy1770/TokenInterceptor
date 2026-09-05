@@ -1,0 +1,74 @@
+{
+  "manifest_version": 3,
+  "name": "openai/claude Token Interceptor",
+  "version": "4.2.0",
+  "description": "在浏览器中发起 OpenAI、Claude 和 Antigravity OAuth 并捕获 Token",
+  "permissions": [
+    "storage",
+    "tabs",
+    "notifications",
+    "webNavigation",
+    "scripting",
+    "cookies",
+    "debugger",
+    "activeTab",
+    "clipboardWrite"
+  ],
+  "host_permissions": [
+    "https://auth.openai.com/*",
+    "https://*.openai.com/*",
+    "https://chatgpt.com/*",
+    "https://claude.com/*",
+    "https://*.claude.com/*",
+    "https://platform.claude.com/*",
+    "https://console.anthropic.com/*",
+    "https://api.anthropic.com/*",
+    "https://oauth2.googleapis.com/*",
+    "https://www.googleapis.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "action": {
+    "default_popup": "ui/popup.html",
+    "default_icon": {
+      "16": "assets/icons/icon16.png",
+      "48": "assets/icons/icon48.png",
+      "128": "assets/icons/icon128.png"
+    },
+    "default_title": "openai/claude Token Interceptor"
+  },
+  "icons": {
+    "16": "assets/icons/icon16.png",
+    "48": "assets/icons/icon48.png",
+    "128": "assets/icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://auth.openai.com/*",
+        "https://*.openai.com/*"
+      ],
+      "js": ["src/content.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "https://console.anthropic.com/oauth/code/callback*",
+        "https://platform.claude.com/oauth/code/callback*"
+      ],
+      "js": ["src/callback.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["assets/icons/*", "src/injected.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

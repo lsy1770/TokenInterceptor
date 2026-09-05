@@ -1,0 +1,30 @@
+name: Feature request
+description: Propose a focused provider or workflow improvement
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What concrete workflow is currently blocked or inefficient?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider scope
+      options: [OpenAI, Claude, Antigravity, Shared UI or runtime, New provider]
+    validations:
+      required: true
+  - type: textarea
+    id: security
+    attributes:
+      label: Permission and security impact
+      description: List any new host, browser permission, stored field, or external request.

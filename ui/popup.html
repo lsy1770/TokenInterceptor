@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenAI / Claude Token Interceptor</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body data-platform="openai">
+  <div class="app">
+    <header class="topbar">
+      <span class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2.5 4 6v5.5c0 4.6 3.2 8.5 8 10 4.8-1.5 8-5.4 8-10V6z"/>
+          <path d="M9.2 12.1h5.6M14.8 12.1a1.6 1.6 0 1 0 3.2 0 1.6 1.6 0 0 0-3.2 0M9.2 10.6v3"/>
+        </svg>
+      </span>
+      <div class="titles">
+        <h1>Token Interceptor</h1>
+        <p>OAuth 凭据获取工具</p>
+      </div>
+      <span class="version">v4.2</span>
+    </header>
+
+    <nav class="platform-switch" aria-label="选择授权平台">
+      <button class="platform-button active" data-platform="openai" type="button">
+        <span class="platform-dot"></span>
+        <strong>OpenAI</strong>
+      </button>
+      <button class="platform-button" data-platform="claude" type="button">
+        <span class="platform-dot"></span>
+        <strong>Claude</strong>
+      </button>
+      <button class="platform-button" data-platform="antigravity" type="button">
+        <span class="platform-dot"></span>
+        <strong>Antigravity</strong>
+      </button>
+    </nav>
+
+    <div class="scroll-area">
+      <section id="platform-openai" class="platform-panel active">
+        <section class="flow-card">
+          <div class="section-heading">
+            <div>
+              <span class="section-kicker">OpenAI · PKCE</span>
+              <h2>获取 Codex Token</h2>
+            </div>
+            <span class="status-pill"><i></i><span id="openaiStatus">就绪</span></span>
+          </div>
+          <p class="section-description">生成授权地址并打开官方登录页，完成后自动处理 localhost 回调。</p>
+          <button id="openaiStart" class="button button-primary button-wide" type="button">生成并打开授权 URL</button>
+          <div id="openaiURLPanel" class="url-panel" hidden>
+            <div class="field-label"><span>授权 URL</span><span id="openaiURLStatus">已生成</span></div>
+            <textarea id="openaiURL" rows="2" readonly></textarea>
+            <div class="button-row compact">
+              <button id="openaiOpenURL" class="button button-secondary" type="button">打开</button>
+              <button id="openaiCopyURL" class="button button-secondary" type="button">复制</button>
+              <button id="openaiRegenerate" class="button button-quiet" type="button">重新生成</button>
+            </div>
+          </div>
+          <ol class="flow-steps" aria-label="OpenAI 授权进度">
+            <li id="openaiStep1"><i>1</i>生成</li>
+            <li id="openaiStep2"><i>2</i>授权</li>
+            <li id="openaiStep3"><i>3</i>回调</li>
+            <li id="openaiStep4"><i>4</i>Token</li>
+          </ol>
+        </section>
+
+        <nav class="subtabs" aria-label="OpenAI 功能">
+          <button class="subtab active" data-tab="tokens" type="button">已保存<span id="tokenCount">0</span></button>
+          <button class="subtab" data-tab="manual" type="button">手动换取</button>
+          <button class="subtab" data-tab="session" type="button">Session 登录</button>
+        </nav>
+
+        <section id="openai-tab-tokens" class="subtab-panel active">
+          <div id="tokenList" class="token-list"></div>
+          <div class="panel-actions">
+            <button id="exportOpenAITxt" class="button button-secondary" type="button">导出 TXT</button>
+            <button id="exportOpenAIJson" class="button button-secondary" type="button">导出 JSON</button>
+            <button id="clearOpenAI" class="button button-danger" type="button">清除</button>
+          </div>
+        </section>
+
+        <section id="openai-tab-manual" class="subtab-panel form-panel">
+          <div id="pendingCodePanel" class="notice warning" hidden>
+            <strong>已捕获待重试授权码</strong>
+            <code id="pendingCode"></code>
+          </div>
+          <label class="field"><span>Authorization Code</span><textarea id="openaiCode" rows="3" placeholder="ac_o21-..."></textarea></label>
+          <label class="field"><span>Code Verifier</span><textarea id="openaiVerifier" rows="2" placeholder="生成授权 URL 后自动填入"></textarea></label>
+          <button id="openaiManualExchange" class="button button-primary button-wide" type="button">手动换取 Token</button>
+        </section>
+
+        <section id="openai-tab-session" class="subtab-panel form-panel">
+          <div class="notice info">在本机写入 chatgpt.com 登录 Cookie。导入会覆盖当前 ChatGPT 登录状态。</div>
+          <label class="field"><span>Session JSON / sessionToken</span><textarea id="sessionPayload" rows="6" placeholder='{"sessionToken":"eyJ...","accessToken":"eyJ..."}'></textarea></label>
+          <label class="check-row"><input id="openChatGPTAfterImport" type="checkbox" checked><span>导入成功后打开 ChatGPT</span></label>
+          <button id="importSession" class="button button-primary button-wide" type="button">导入并登录</button>
+          <p id="sessionStatus" class="inline-status"></p>
+        </section>
+      </section>
+
+      <section id="platform-claude" class="platform-panel">
+        <section class="flow-card">
+          <div class="section-heading">
+            <div>
+              <span class="section-kicker">Claude · PKCE</span>
+              <h2>获取 Claude Token</h2>
+            </div>
+            <span id="claudeStateDot" class="state-dot"></span>
+          </div>
+          <p class="section-description">通过 Claude 官方授权页完成 PKCE，并自动识别回调页面中的授权码。</p>
+          <button id="claudeOpenAuth" class="button button-primary button-wide" type="button">生成并打开授权 URL</button>
+          <div id="claudeURLPanel" class="url-panel" hidden>
+            <div class="field-label"><span>授权 URL</span><span>当前会话</span></div>
+            <textarea id="claudeURL" rows="2" readonly></textarea>
+            <button id="claudeCopyURL" class="button button-secondary button-wide" type="button">复制授权 URL</button>
+          </div>
+        </section>
+
+        <section class="status-card" aria-live="polite">
+          <span id="claudeStatusIcon" class="status-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="8.5"/><path d="M12 7.8v4.6l3 1.8"/>
+            </svg>
+          </span>
+          <div>
+            <strong id="claudeStatusTitle">未开始</strong>
+            <p id="claudeStatusDetail">生成授权 URL，或监听已有 Claude Token 请求。</p>
+          </div>
+        </section>
+
+        <section class="form-panel">
+          <label class="field"><span>未自动识别时粘贴 authorization code</span><textarea id="claudeCode" rows="2" placeholder="code、code#state 或完整回调 URL"></textarea></label>
+          <button id="claudeExchange" class="button button-secondary button-wide" type="button">手动交换 Token</button>
+          <div class="divider"><span>兼容模式</span></div>
+          <div class="button-row">
+            <button id="claudeListen" class="button button-secondary" type="button">监听已有请求</button>
+            <button id="claudeStop" class="button button-quiet" type="button">停止监听</button>
+          </div>
+          <p class="permission-note">监听模式使用 Chrome debugger 读取 Claude Token 响应，仅在本次浏览器会话保存结果。</p>
+        </section>
+
+        <section id="claudeTokenPanel" class="token-detail" hidden>
+          <div class="token-detail-heading">
+            <div><span class="section-kicker">Captured</span><h3>Claude Token</h3></div>
+            <span id="claudeCapturedAt" class="timestamp">-</span>
+          </div>
+          <label class="field"><span>access_token</span><input id="claudeAccessToken" type="password" readonly></label>
+          <label class="field"><span>refresh_token</span><input id="claudeRefreshToken" type="password" readonly></label>
+          <div class="token-meta"><span>有效期</span><strong id="claudeExpires">-</strong></div>
+          <div class="button-row">
+            <button id="claudeReveal" class="button button-secondary" type="button">显示 Token</button>
+            <button id="claudeCopy" class="button button-primary" type="button">复制 JSON</button>
+            <button id="claudeClear" class="button button-danger" type="button">清除</button>
+          </div>
+        </section>
+        <p id="claudeError" class="error-message" hidden></p>
+      </section>
+
+      <section id="platform-antigravity" class="platform-panel">
+        <section class="flow-card">
+          <div class="section-heading">
+            <div>
+              <span class="section-kicker">Google OAuth</span>
+              <h2>获取 Antigravity Token</h2>
+            </div>
+            <span id="antigravityStateDot" class="state-dot"></span>
+          </div>
+          <p class="section-description">使用 Antigravity Manager 内置 OAuth 客户端获取离线凭据，完成授权后自动处理 localhost:1456 回调。</p>
+          <button id="antigravityOpenAuth" class="button button-primary button-wide" type="button">生成并打开授权 URL</button>
+          <div id="antigravityURLPanel" class="url-panel" hidden>
+            <div class="field-label"><span>授权 URL</span><span>当前会话</span></div>
+            <textarea id="antigravityURL" rows="2" readonly></textarea>
+            <button id="antigravityCopyURL" class="button button-secondary button-wide" type="button">复制授权 URL</button>
+          </div>
+        </section>
+
+        <section class="status-card" aria-live="polite">
+          <span class="status-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="8.5"/><path d="M12 7.8v4.6l3 1.8"/>
+            </svg>
+          </span>
+          <div>
+            <strong id="antigravityStatusTitle">未开始</strong>
+            <p id="antigravityStatusDetail">点击按钮生成 Google 授权 URL。</p>
+          </div>
+        </section>
+
+        <section class="form-panel">
+          <label class="field">
+            <span>未自动识别时粘贴 authorization code</span>
+            <textarea id="antigravityCode" rows="3" placeholder="授权码或 http://localhost:1456/oauth-callback?... 完整 URL"></textarea>
+          </label>
+          <button id="antigravityExchange" class="button button-secondary button-wide" type="button">手动交换 Token</button>
+        </section>
+
+        <section id="antigravityTokenPanel" class="token-detail" hidden>
+          <div class="token-detail-heading">
+            <div><span class="section-kicker">Captured</span><h3>Antigravity Token</h3></div>
+            <span id="antigravityCapturedAt" class="timestamp">-</span>
+          </div>
+          <div class="token-meta"><span>Google 账号</span><strong id="antigravityEmail">-</strong></div>
+          <div class="token-meta"><span>账号名称</span><strong id="antigravityName">-</strong></div>
+          <label class="field"><span>access_token</span><input id="antigravityAccessToken" type="password" readonly></label>
+          <label class="field"><span>refresh_token</span><input id="antigravityRefreshToken" type="password" readonly></label>
+          <label class="field"><span>id_token</span><input id="antigravityIDToken" type="password" readonly></label>
+          <div class="token-meta"><span>有效期</span><strong id="antigravityExpires">-</strong></div>
+          <div class="button-row">
+            <button id="antigravityReveal" class="button button-secondary" type="button">显示 Token</button>
+            <button id="antigravityCopy" class="button button-primary" type="button">复制 JSON</button>
+            <button id="antigravityClear" class="button button-danger" type="button">清除</button>
+          </div>
+        </section>
+        <p id="antigravityError" class="error-message" hidden></p>
+      </section>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status"></div>
+  <script src="popup.js"></script>
+</body>
+</html>
