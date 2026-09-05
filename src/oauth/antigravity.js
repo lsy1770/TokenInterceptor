@@ -6,6 +6,7 @@
   const USERINFO_URL = 'https://www.googleapis.com/oauth2/v2/userinfo';
   const REDIRECT_URI = 'http://localhost:1456/oauth-callback';
   const CLIENT_ID = '1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com';
+  const CLIENT_SECRET = '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';
   const SCOPES = [
     'openid',
     'https://www.googleapis.com/auth/cloud-platform',
@@ -96,6 +97,7 @@
   const api = {
     AUTHORIZE_URL,
     CLIENT_ID,
+    CLIENT_SECRET,
     REDIRECT_URI,
     SCOPES,
     TOKEN_URL,

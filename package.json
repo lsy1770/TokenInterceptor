@@ -14,8 +14,7 @@
   "scripts": {
     "check": "node scripts/validate-extension.js",
     "test": "node tests/claude-flow.test.js && node tests/claude-token-parser.test.js && node tests/antigravity.test.js && node tests/background-smoke.test.js",
-    "verify": "npm run check && npm test",
-    "setup:antigravity": "node scripts/sync-antigravity-credentials.js"
+    "verify": "npm run check && npm test"
   },
   "engines": {
     "node": ">=20"

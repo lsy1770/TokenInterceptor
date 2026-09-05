@@ -6,7 +6,7 @@ All notable changes are documented here. Versions follow Semantic Versioning whe
 
 ### Added
 
-- Antigravity OAuth based on the Antigravity Manager desktop client flow.
+- Built-in Antigravity desktop OAuth flow with automatic loopback callback capture.
 - Automatic `localhost:1456/oauth-callback` capture and state validation.
 - Antigravity access, refresh and ID Token export with Google profile metadata.
 - Local ignored credential synchronization script.

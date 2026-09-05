@@ -40,24 +40,16 @@
 
 ## 快速开始
 
-### 1. 准备 Antigravity 凭据
+OpenAI、Claude 和 Antigravity 均无需填写额外配置。
 
-OpenAI 和 Claude 无需额外配置。Antigravity 使用 Antigravity Manager 的内置桌面 OAuth 客户端。项目不会提交 Client Secret，需要从本地 Manager 源码同步：
-
-```powershell
-npm run setup:antigravity -- "D:\Claude\Antigravity-Manager-main"
-```
-
-该命令生成 `config/antigravity-credentials.local.json`。文件已被 `.gitignore` 排除，不会出现在提交中。
-
-### 2. 加载扩展
+### 1. 加载扩展
 
 1. 打开 `chrome://extensions/` 或 `edge://extensions/`。
 2. 开启“开发者模式”。
 3. 点击“加载已解压的扩展程序”。
 4. 选择本项目根目录，也就是包含 `manifest.json` 的目录。
 
-### 3. 开始授权
+### 2. 开始授权
 
 点击浏览器工具栏中的扩展图标，选择 OpenAI、Claude 或 Antigravity，然后点击平台面板中的主按钮。
 
@@ -82,7 +74,7 @@ npm run setup:antigravity -- "D:\Claude\Antigravity-Manager-main"
 
 ### Antigravity
 
-扩展复用 Antigravity Manager 的桌面 OAuth 客户端配置，使用 Google OAuth 获取离线凭据：
+扩展通过内置的 Google 桌面 OAuth 流程获取 Antigravity 离线凭据：
 
 - 六个 Antigravity/Google scope。
 - `access_type=offline` 和 `prompt=consent`。
@@ -94,7 +86,6 @@ npm run setup:antigravity -- "D:\Claude\Antigravity-Manager-main"
 
 - OpenAI 历史 Token 保存在 `chrome.storage.local`，最多 20 条，可随时清除。
 - Claude 和 Antigravity Token 保存在 `chrome.storage.session`，浏览器会话结束后自动清除。
-- Antigravity Client Secret 仅存在于被忽略的本地凭据文件，不显示在 UI，也不写入导出数据。
 - 扩展不会上传 Token，不接入遥测或第三方分析。
 - Claude 的 `debugger` 权限只用于用户主动开启的兼容监听和浏览器上下文 Token 交换。
 - 外部回调会校验主机、路径和 OAuth state，拒绝不匹配的输入。
@@ -106,9 +97,8 @@ npm run setup:antigravity -- "D:\Claude\Antigravity-Manager-main"
 ```text
 .
 ├── assets/icons/             # 扩展图标
-├── config/                   # 本地凭据模板（真实凭据不提交）
 ├── docs/                     # 架构与品牌资源
-├── scripts/                  # 校验和本地凭据同步
+├── scripts/                  # 项目校验脚本
 ├── src/
 │   ├── oauth/                # Claude / Antigravity 协议模块
 │   ├── background.js         # Service worker 与消息路由
@@ -147,9 +137,6 @@ npm run verify    # 执行全部质量检查
 
 Google 有时不会为已经授权过的应用再次签发 refresh token。撤销该应用的历史授权后重新执行 consent 流程。
 
-**可以发布到商店吗？**
-
-可以，但发布前应自行替换品牌素材、准备隐私政策，并通过目标商店的权限审核。不要把本地凭据文件提交到公开仓库。
 
 ## 参与贡献
 

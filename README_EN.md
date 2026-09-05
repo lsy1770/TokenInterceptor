@@ -40,24 +40,16 @@ It is not an account manager and does not upload credentials. Sensitive data sta
 
 ## Quick start
 
-### 1. Prepare Antigravity credentials
+OpenAI, Claude, and Antigravity require no additional configuration.
 
-OpenAI and Claude require no extra setup. Antigravity uses the built-in desktop OAuth client from Antigravity Manager. The client secret is intentionally excluded from the repository; synchronize it from a local Manager checkout:
-
-```powershell
-npm run setup:antigravity -- "D:\Claude\Antigravity-Manager-main"
-```
-
-This creates `config/antigravity-credentials.local.json`, which is excluded by `.gitignore`.
-
-### 2. Load the extension
+### 1. Load the extension
 
 1. Open `chrome://extensions/` or `edge://extensions/`.
 2. Enable Developer mode.
 3. Select **Load unpacked**.
 4. Choose this project root, the directory containing `manifest.json`.
 
-### 3. Start a flow
+### 2. Start a flow
 
 Open the extension from the browser toolbar, choose OpenAI, Claude, or Antigravity, then use the primary action in that provider panel.
 
@@ -77,7 +69,7 @@ The optional compatibility listener uses `chrome.debugger` to read an existing C
 
 ### Antigravity
 
-The extension mirrors the desktop OAuth flow used by Antigravity Manager:
+The extension uses a built-in Google desktop OAuth flow to obtain Antigravity offline credentials:
 
 - Six Antigravity/Google scopes.
 - `access_type=offline` and `prompt=consent`.
@@ -89,7 +81,6 @@ The extension mirrors the desktop OAuth flow used by Antigravity Manager:
 
 - OpenAI history uses `chrome.storage.local`, capped at 20 entries.
 - Claude and Antigravity tokens use `chrome.storage.session` and disappear with the browser session.
-- The Antigravity client secret lives only in an ignored local credential file. It is never rendered or exported.
 - The extension has no telemetry, analytics, or token upload path.
 - `chrome.debugger` is limited to the user-initiated Claude compatibility flow and its temporary exchange context.
 - Callback host, path, and OAuth state are validated at the extension boundary.
@@ -101,9 +92,8 @@ See the [security policy](SECURITY.md), [privacy notice](docs/PRIVACY.md), and [
 ```text
 .
 ├── assets/icons/             # Extension icons
-├── config/                   # Local credential template (secrets are ignored)
 ├── docs/                     # Architecture and brand assets
-├── scripts/                  # Validation and local credential setup
+├── scripts/                  # Project validation
 ├── src/
 │   ├── oauth/                # Claude and Antigravity protocol modules
 │   ├── background.js         # Service worker and message router
@@ -144,7 +134,7 @@ Google may omit a refresh token for an application that was authorized previousl
 
 **Can this be published to an extension store?**
 
-Yes, after providing your own store assets and privacy policy and completing the target store's permission review. Never publish the local credential file.
+Yes, after providing your own store assets and privacy policy and completing the target store's permission review.
 
 ## Contributing
 

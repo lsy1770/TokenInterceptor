@@ -30,12 +30,6 @@ global.importScripts = (...files) => {
 };
 global.fetch = async (url, options) => {
   fetchCalls.push({ url, options });
-  if (String(url).startsWith('chrome-extension://')) {
-    return {
-      ok: true,
-      async json() { return { clientSecret: 'session-secret' }; }
-    };
-  }
   if (String(url).includes('/oauth2/v2/userinfo')) {
     return {
       ok: true,
@@ -123,7 +117,8 @@ function sendMessage(message) {
   const tokenCall = fetchCalls.find(call => String(call.url).includes('oauth2.googleapis.com/token'));
   assert.ok(tokenCall);
   const exchangeForm = new URLSearchParams(tokenCall.options.body);
-  assert.equal(exchangeForm.get('client_secret'), 'session-secret');
+  assert.ok(exchangeForm.get('client_secret'));
+  assert.equal(exchangeForm.get('client_secret'), global.AntigravityOAuth.CLIENT_SECRET);
   assert.equal(exchangeForm.get('code'), '4/test-code');
   assert.equal(exchangeForm.has('code_verifier'), false);
   assert.equal(exchangeForm.get('redirect_uri'), 'http://localhost:1456/oauth-callback');

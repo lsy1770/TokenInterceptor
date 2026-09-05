@@ -10,9 +10,9 @@ Use the repository host's private security advisory feature when available. Do n
 
 Include the affected version, provider flow, reproduction steps, impact and a redacted proof of concept.
 
-## Sensitive local files
+## OAuth client metadata
 
-`config/antigravity-credentials.local.json` contains OAuth client material and is excluded by `.gitignore`. Do not commit, attach, screenshot or publish it. Regenerate it locally with `npm run setup:antigravity -- <manager-path>`.
+Antigravity uses installed-application OAuth client metadata. This metadata cannot authorize an account by itself; Google still requires an interactive user grant. Authorization codes and issued tokens remain sensitive and must never be logged or published.
 
 ## Permission rationale
 

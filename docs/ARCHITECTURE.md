@@ -8,7 +8,7 @@ The extension keeps provider-specific OAuth behavior isolated while sharing one 
 2. OAuth state and PKCE verifier values never cross provider namespaces.
 3. Tokens are never sent to an application-owned remote service.
 4. Optional browser debugging is started by an explicit user action and always detached.
-5. Antigravity Client Secret material never enters UI state or exported token objects.
+5. Provider OAuth client metadata never enters UI state or exported token objects.
 
 ## Runtime topology
 
@@ -41,9 +41,9 @@ The service worker performs exchange in a temporary Anthropic tab because the up
 
 ### Antigravity
 
-`src/oauth/antigravity.js` mirrors Antigravity Manager's built-in Google desktop OAuth client: six scopes, offline access, consent prompt, state validation, and no PKCE. A dedicated `localhost:1456/oauth-callback` address avoids colliding with the OpenAI callback.
+`src/oauth/antigravity.js` implements the Google desktop OAuth flow: six scopes, offline access, consent prompt, state validation, and no PKCE. A dedicated `localhost:1456/oauth-callback` address avoids colliding with the OpenAI callback.
 
-The service worker reads Client Secret material from `config/antigravity-credentials.local.json` only at exchange time. The file is ignored by version control and is not web-accessible. The final token record excludes the secret.
+The provider module owns the OAuth client metadata used during authorization and exchange. The final token record contains only account and token response fields.
 
 ## Message boundary
 
@@ -59,7 +59,6 @@ All background failures return `{ ok: false, error }`; the popup surfaces the er
 | OpenAI PKCE | `storage.session` | Browser session |
 | Claude OAuth and Token | `storage.session` | Browser session |
 | Antigravity OAuth and Token | `storage.session` | Browser session |
-| Antigravity Client Secret | Ignored extension-local file | Local filesystem |
 
 ## Validation
 

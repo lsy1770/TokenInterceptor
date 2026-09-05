@@ -727,18 +727,7 @@ async function getClaudeState() {
 // ================================================================
 // Antigravity Google OAuth
 // ================================================================
-async function loadAntigravityCredentials() {
-  const response = await fetch(chrome.runtime.getURL('config/antigravity-credentials.local.json'));
-  if (!response.ok) throw new Error('Antigravity 本地凭据文件读取失败');
-  const credentials = await response.json();
-  if (typeof credentials?.clientSecret !== 'string' || !credentials.clientSecret.trim()) {
-    throw new Error('Antigravity 本地凭据文件缺少 Client Secret');
-  }
-  return credentials.clientSecret.trim();
-}
-
 async function generateAntigravityAuthorizationURL() {
-  await loadAntigravityCredentials();
   const state = randomBase64URL(32);
   const authURL = AntigravityOAuth.buildAuthorizeURL(state);
   await chrome.storage.session.set({
@@ -784,7 +773,6 @@ async function exchangeAntigravityAuthorizationCode(rawValue) {
 
   const callback = AntigravityOAuth.extractAuthorizationCode(rawValue, expectedState);
   if (!callback?.code) throw new Error('没有找到有效的 Antigravity authorization code');
-  const clientSecret = await loadAntigravityCredentials();
   await chrome.storage.session.set({ [ANTIGRAVITY_KEYS.exchanging]: true });
 
   try {
@@ -796,7 +784,7 @@ async function exchangeAntigravityAuthorizationCode(rawValue) {
       },
       body: new URLSearchParams({
         client_id: AntigravityOAuth.CLIENT_ID,
-        client_secret: clientSecret,
+        client_secret: AntigravityOAuth.CLIENT_SECRET,
         code: callback.code,
         redirect_uri: AntigravityOAuth.REDIRECT_URI,
         grant_type: 'authorization_code'

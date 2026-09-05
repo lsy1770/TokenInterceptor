@@ -70,13 +70,4 @@ const popupIDs = [...popupJS.matchAll(/\$\('([^']+)'\)/g)].map(match => match[1]
 const missingIDs = [...new Set(popupIDs)].filter(id => !popupHTML.includes(`id="${id}"`));
 assert(missingIDs.length === 0, `Popup references missing IDs: ${missingIDs.join(', ')}`);
 
-const credentialPath = path.join(root, 'config', 'antigravity-credentials.local.json');
-if (!fs.existsSync(credentialPath)) {
-  console.warn('warning: Antigravity credentials are not configured; run npm run setup:antigravity -- <manager-path>');
-} else {
-  const credentials = JSON.parse(fs.readFileSync(credentialPath, 'utf8'));
-  assert(typeof credentials.clientSecret === 'string' && credentials.clientSecret.trim(),
-    'Antigravity credential file has no clientSecret');
-}
-
 console.log(`extension validation passed (${new Set(referencedFiles).size} manifest files, ${new Set(popupIDs).size} popup IDs)`);

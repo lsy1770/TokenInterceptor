@@ -9,14 +9,6 @@ Thanks for improving Token Interceptor. Keep changes small, provider-scoped and 
 3. Load the project root as an unpacked Chrome or Edge extension.
 4. Reload the extension after changing Manifest or service-worker code.
 
-Antigravity development additionally requires a local credential file:
-
-```powershell
-npm run setup:antigravity -- "path-to-Antigravity-Manager"
-```
-
-Never commit `config/antigravity-credentials.local.json`.
-
 ## Change rules
 
 - Keep OAuth constants and parsing rules in the matching module under `src/oauth/`.
