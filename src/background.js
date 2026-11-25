@@ -1,4 +1,4 @@
-importScripts('oauth/claude-flow.js', 'oauth/claude-token-parser.js', 'oauth/antigravity.js');
+importScripts('oauth/claude-flow.js', 'oauth/claude-token-parser.js', 'oauth/antigravity.js', 'oauth/grok-sso.js', 'oauth/grok-oauth.js', 'oauth/claude-session.js', 'oauth/creds-google.js');
 
 // background.js v4.1.1
 // 两条获取路径：
@@ -30,6 +30,13 @@ const CHATGPT_URL  = 'https://chatgpt.com/';
 const SESSION_COOKIE_BASE = '__Secure-next-auth.session-token';
 const SESSION_COOKIE_CHUNK_SIZE = 3900;
 
+const GROK_URL = 'https://grok.com/';
+const GROK_SSO_COOKIE_NAMES = [...GrokSSO.SSO_COOKIE_NAMES, ...GrokSSO.USERID_COOKIE_NAMES];
+
+const CLAUDE_COOKIE_URLS = ['https://claude.com/', 'https://claude.ai/'];
+const CLAUDE_CREDENTIAL_COOKIES = ['anthropic-device-id', 'lastActiveOrg', 'sessionKey', 'routingHint'];
+const OPENAI_SESSION_URL = 'https://chatgpt.com/api/auth/session';
+
 const CLAUDE_KEYS = {
   active: 'claudeCaptureActive',
   attachedTabs: 'claudeCaptureAttachedTabs',
@@ -59,6 +66,17 @@ const ANTIGRAVITY_KEYS = {
   exchanging: 'antigravityOAuthExchangeInProgress'
 };
 const handledAntigravityCodes = new Set();
+
+const GROK_OAUTH_KEYS = {
+  token: 'grokOAuthToken',
+  error: 'grokOAuthError',
+  oauthState: 'grokOAuthState',
+  oauthVerifier: 'grokOAuthCodeVerifier',
+  oauthURL: 'grokOAuthAuthorizeURL',
+  oauthStartedAt: 'grokOAuthStartedAt',
+  exchanging: 'grokOAuthExchangeInProgress'
+};
+const handledGrokCodes = new Set();
 
 // ================================================================
 // 构建授权 URL
@@ -222,12 +240,14 @@ chrome.webNavigation.onBeforeNavigate.addListener(
     if (d.frameId !== 0) return;
     void handleCallbackURL(d.url);
     void handleAntigravityCallbackURL(d.url);
+    void handleGrokCallbackURL(d.url);
   }
 );
 chrome.tabs.onUpdated.addListener((id, info) => {
   if (!info.url) return;
   void handleCallbackURL(info.url);
   void handleAntigravityCallbackURL(info.url);
+  void handleGrokCallbackURL(info.url);
 });
 
 // ================================================================
@@ -321,6 +341,15 @@ function cookiesGetAll(details) {
     chrome.cookies.getAll(details, cookies => {
       const err = chrome.runtime.lastError;
       if (err) reject(new Error(err.message)); else resolve(cookies || []);
+    });
+  });
+}
+
+function cookiesGet(details) {
+  return new Promise((resolve, reject) => {
+    chrome.cookies.get(details, cookie => {
+      const err = chrome.runtime.lastError;
+      if (err) reject(new Error(err.message)); else resolve(cookie);
     });
   });
 }
@@ -436,6 +465,223 @@ async function importChatGPTSession(input) {
     chunkCount: cookieInfo.chunkCount,
     accessTokenStored
   };
+}
+
+// ================================================================
+// Grok SSO Cookie import login
+// ================================================================
+async function clearGrokSSOCookies() {
+  if (!chrome.cookies) throw new Error('缺少 cookies 权限，请重新加载扩展');
+  const cookies = await cookiesGetAll({ url: GROK_URL });
+  const targets = cookies.filter(c => GROK_SSO_COOKIE_NAMES.includes(c.name));
+  await Promise.all(targets.map(c => cookiesRemove({ url: GROK_URL, name: c.name })));
+}
+
+async function writeGrokSSOCookies(parsed) {
+  await clearGrokSSOCookies();
+
+  const expirationDate = Math.floor((Date.now() + 30 * 24 * 60 * 60 * 1000) / 1000);
+  const baseDetails = {
+    url: GROK_URL,
+    path: '/',
+    secure: true,
+    httpOnly: false,
+    sameSite: 'lax',
+    expirationDate
+  };
+
+  await cookiesSet({ ...baseDetails, name: 'sso', value: parsed.sso });
+  await cookiesSet({ ...baseDetails, name: 'sso-rw', value: parsed.ssoRw || parsed.sso });
+  if (parsed.userId) {
+    await cookiesSet({ ...baseDetails, name: 'x-userid', value: parsed.userId });
+  }
+
+  return { expiresAt: new Date(expirationDate * 1000).toISOString() };
+}
+
+async function importGrokSSO(input) {
+  const parsed = GrokSSO.parseGrokSSOImport(input);
+  const cookieInfo = await writeGrokSSOCookies(parsed);
+
+  await chrome.storage.local.set({
+    lastGrokSSOImport: {
+      importedAt: new Date().toISOString(),
+      email: parsed.email || '',
+      xUsername: parsed.xUsername || '',
+      expiresAt: cookieInfo.expiresAt
+    }
+  });
+
+  return {
+    ok: true,
+    email: parsed.email || '',
+    xUsername: parsed.xUsername || '',
+    expiresAt: cookieInfo.expiresAt
+  };
+}
+
+// ================================================================
+// 账户凭据捕获（从已登录站点读取，导出 JSON）
+// ================================================================
+async function readCookie(url, name) {
+  if (!chrome.cookies) throw new Error('缺少 cookies 权限，请重新加载扩展');
+  const cookie = await cookiesGet({ url, name });
+  return cookie ? cookie.value : '';
+}
+
+async function readCookieFromAny(urls, name) {
+  for (const url of urls) {
+    const value = await readCookie(url, name);
+    if (value) return value;
+  }
+  return '';
+}
+
+async function readChatGPTSessionToken() {
+  const cookies = await cookiesGetAll({ url: CHATGPT_URL });
+  const chunks = [];
+  let single = '';
+  for (const cookie of cookies) {
+    if (cookie.name === SESSION_COOKIE_BASE) single = cookie.value;
+    else if (cookie.name.startsWith(SESSION_COOKIE_BASE + '.')) {
+      const index = Number(cookie.name.slice(SESSION_COOKIE_BASE.length + 1));
+      if (Number.isInteger(index) && index >= 0) chunks[index] = cookie.value;
+    }
+  }
+  const filled = chunks.filter(value => typeof value === 'string');
+  if (filled.length && filled.length === chunks.length) return chunks.join('');
+  return single;
+}
+
+async function fetchOpenAISession() {
+  const response = await fetch(OPENAI_SESSION_URL, {
+    headers: { 'Accept': 'application/json' },
+    credentials: 'include'
+  });
+  const text = await response.text();
+  let data;
+  try { data = JSON.parse(text); } catch { throw new Error('ChatGPT session 响应不是有效 JSON'); }
+  if (!response.ok) throw new Error(`/api/auth/session 请求失败（HTTP ${response.status}）`);
+  if (!data || !data.user) throw new Error('未检测到 ChatGPT 登录状态');
+  return data;
+}
+
+async function captureOpenAICredentials() {
+  const [session, sessionToken] = await Promise.all([
+    fetchOpenAISession(),
+    readChatGPTSessionToken().catch(() => '')
+  ]);
+  return {
+    provider: 'openai',
+    capturedAt: new Date().toISOString(),
+    sessionToken,
+    accessToken: session.accessToken || '',
+    expires: session.expires || '',
+    user: session.user || null,
+    session
+  };
+}
+
+async function captureClaudeCredentials() {
+  const values = {};
+  for (const name of CLAUDE_CREDENTIAL_COOKIES) {
+    values[name] = await readCookieFromAny(CLAUDE_COOKIE_URLS, name);
+  }
+  if (!values.sessionKey) throw new Error('未检测到 Claude 登录 Cookie（sessionKey）');
+  return {
+    provider: 'claude',
+    capturedAt: new Date().toISOString(),
+    anthropicDeviceId: values['anthropic-device-id'],
+    lastActiveOrg: values.lastActiveOrg,
+    sessionKey: values.sessionKey,
+    routingHint: values.routingHint
+  };
+}
+
+async function captureGrokCredentials() {
+  const [sso, ssoRw, xUserid] = await Promise.all([
+    readCookie(GROK_URL, 'sso'),
+    readCookie(GROK_URL, 'sso-rw'),
+    readCookie(GROK_URL, 'x-userid')
+  ]);
+  if (!sso && !ssoRw) throw new Error('未检测到 Grok 登录 Cookie（sso）');
+  return {
+    provider: 'grok',
+    capturedAt: new Date().toISOString(),
+    sso,
+    ssoRw: ssoRw || sso,
+    xUserid
+  };
+}
+
+async function captureCredentials(provider) {
+  const targets = provider === 'all' ? ['openai', 'claude', 'grok'] : [provider];
+  const credentials = {};
+  const errors = {};
+  for (const target of targets) {
+    try {
+      if (target === 'openai') credentials.openai = await captureOpenAICredentials();
+      else if (target === 'claude') credentials.claude = await captureClaudeCredentials();
+      else if (target === 'grok') credentials.grok = await captureGrokCredentials();
+    } catch (error) {
+      errors[target] = error.message;
+    }
+  }
+  return { capturedAt: new Date().toISOString(), credentials, errors };
+}
+
+// ================================================================
+// Claude sessionKey / Cookie import login
+// ================================================================
+async function clearClaudeSessionCookies() {
+  if (!chrome.cookies) throw new Error('缺少 cookies 权限，请重新加载扩展');
+  for (const url of CLAUDE_COOKIE_URLS) {
+    const cookies = await cookiesGetAll({ url });
+    const targets = cookies.filter(c => CLAUDE_CREDENTIAL_COOKIES.includes(c.name));
+    await Promise.all(targets.map(c => cookiesRemove({ url, name: c.name })));
+  }
+}
+
+async function writeClaudeSessionCookies(parsed) {
+  await clearClaudeSessionCookies();
+
+  const expirationDate = Math.floor((Date.now() + 30 * 24 * 60 * 60 * 1000) / 1000);
+  const entries = [
+    ['sessionKey', parsed.sessionKey],
+    ['lastActiveOrg', parsed.lastActiveOrg],
+    ['anthropic-device-id', parsed.anthropicDeviceId],
+    ['routingHint', parsed.routingHint]
+  ];
+  for (const url of CLAUDE_COOKIE_URLS) {
+    for (const [name, value] of entries) {
+      if (!value) continue;
+      await cookiesSet({
+        url,
+        path: '/',
+        name,
+        value,
+        secure: true,
+        httpOnly: false,
+        sameSite: 'lax',
+        expirationDate
+      });
+    }
+  }
+  return { expiresAt: new Date(expirationDate * 1000).toISOString() };
+}
+
+async function importClaudeSession(input) {
+  const parsed = ClaudeSession.parseClaudeSessionImport(input);
+  const cookieInfo = await writeClaudeSessionCookies(parsed);
+
+  await chrome.storage.local.set({
+    lastClaudeSessionImport: {
+      importedAt: new Date().toISOString(),
+      expiresAt: cookieInfo.expiresAt
+    }
+  });
+
+  return { ok: true, expiresAt: cookieInfo.expiresAt };
 }
 
 // ================================================================
@@ -880,6 +1126,147 @@ async function handleAntigravityCallbackURL(rawURL) {
   }
 }
 
+// ================================================================
+// Grok OAuth（authorization code + PKCE + loopback 回调）
+// ================================================================
+async function generateGrokAuthorizationURL() {
+  const pkce = await createPKCE();
+  const state = randomBase64URL(32);
+  const authURL = GrokOAuth.buildAuthorizeURL(pkce.challenge, state);
+  await chrome.storage.session.set({
+    [GROK_OAUTH_KEYS.oauthVerifier]: pkce.verifier,
+    [GROK_OAUTH_KEYS.oauthState]: state,
+    [GROK_OAUTH_KEYS.oauthURL]: authURL,
+    [GROK_OAUTH_KEYS.oauthStartedAt]: new Date().toISOString(),
+    [GROK_OAUTH_KEYS.exchanging]: false
+  });
+  await chrome.storage.session.remove([GROK_OAUTH_KEYS.token, GROK_OAUTH_KEYS.error]);
+  await chrome.tabs.create({ url: authURL, active: true });
+  return authURL;
+}
+
+function grokTokenError(status, body) {
+  try {
+    const data = JSON.parse(body);
+    return data.error_description || data.error || `HTTP ${status}`;
+  } catch {
+    return body.slice(0, 160) || `HTTP ${status}`;
+  }
+}
+
+async function exchangeGrokAuthorizationCode(rawValue) {
+  const stored = await chrome.storage.session.get([
+    GROK_OAUTH_KEYS.oauthVerifier,
+    GROK_OAUTH_KEYS.oauthState,
+    GROK_OAUTH_KEYS.exchanging
+  ]);
+  if (stored[GROK_OAUTH_KEYS.exchanging]) return;
+  const verifier = stored[GROK_OAUTH_KEYS.oauthVerifier];
+  const expectedState = stored[GROK_OAUTH_KEYS.oauthState];
+  if (!verifier || !expectedState) throw new Error('请先生成 Grok 授权 URL');
+
+  const callback = GrokOAuth.extractAuthorizationCode(rawValue, expectedState);
+  if (!callback?.code) throw new Error('没有找到有效的 Grok authorization code');
+  await chrome.storage.session.set({ [GROK_OAUTH_KEYS.exchanging]: true });
+
+  try {
+    const response = await fetch(GrokOAuth.TOKEN_URL, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        client_id: GrokOAuth.CLIENT_ID,
+        code: callback.code,
+        redirect_uri: GrokOAuth.REDIRECT_URI,
+        code_verifier: verifier
+      }).toString()
+    });
+    const body = await response.text();
+    if (!response.ok) {
+      throw new Error(`Grok Token 交换失败：${grokTokenError(response.status, body)}`);
+    }
+    const parsed = GrokOAuth.parseTokenResponse(body);
+    if (!parsed) throw new Error('Grok Token 响应缺少 access_token');
+
+    const identity = GrokOAuth.decodeIDToken(parsed.id_token);
+    const capturedAt = new Date();
+    const token = {
+      provider: 'grok',
+      ...parsed,
+      email: identity.email,
+      name: identity.name,
+      captured_at: capturedAt.toISOString(),
+      expires_at: parsed.expires_in
+        ? new Date(capturedAt.getTime() + parsed.expires_in * 1000).toISOString()
+        : '',
+      client_id: GrokOAuth.CLIENT_ID,
+      redirect_uri: GrokOAuth.REDIRECT_URI,
+      token_url: GrokOAuth.TOKEN_URL
+    };
+    await chrome.storage.session.set({
+      [GROK_OAUTH_KEYS.token]: token,
+      [GROK_OAUTH_KEYS.error]: '',
+      [GROK_OAUTH_KEYS.exchanging]: false
+    });
+    await chrome.storage.session.remove([
+      GROK_OAUTH_KEYS.oauthVerifier,
+      GROK_OAUTH_KEYS.oauthState,
+      GROK_OAUTH_KEYS.oauthStartedAt
+    ]);
+    return token;
+  } catch (error) {
+    await chrome.storage.session.set({
+      [GROK_OAUTH_KEYS.error]: error.message,
+      [GROK_OAUTH_KEYS.exchanging]: false
+    });
+    throw error;
+  }
+}
+
+async function getGrokState() {
+  const state = await chrome.storage.session.get(Object.values(GROK_OAUTH_KEYS));
+  return {
+    capturedToken: state[GROK_OAUTH_KEYS.token] || null,
+    error: state[GROK_OAUTH_KEYS.error] || '',
+    oauthAuthorizeURL: state[GROK_OAUTH_KEYS.oauthURL] || '',
+    oauthPending: Boolean(state[GROK_OAUTH_KEYS.oauthState]),
+    exchanging: Boolean(state[GROK_OAUTH_KEYS.exchanging])
+  };
+}
+
+async function handleGrokCallbackURL(rawURL) {
+  let url;
+  try {
+    url = new URL(rawURL);
+  } catch {
+    return;
+  }
+  if (!GrokOAuth.isCallbackURL(url)) return;
+  const code = url.searchParams.get('code');
+  if (!code) {
+    const oauthError = url.searchParams.get('error');
+    if (oauthError) {
+      await chrome.storage.session.set({
+        [GROK_OAUTH_KEYS.error]: `Grok 授权失败：${oauthError}`
+      });
+    }
+    return;
+  }
+  const codeKey = code.slice(0, 40);
+  if (handledGrokCodes.has(codeKey)) return;
+  handledGrokCodes.add(codeKey);
+  setTimeout(() => handledGrokCodes.delete(codeKey), 120000);
+  try {
+    await exchangeGrokAuthorizationCode(rawURL);
+    notify('Grok Token 已获取', '点击扩展图标查看并复制');
+  } catch (error) {
+    notify('Grok Token 获取失败', error.message.slice(0, 100));
+  }
+}
+
 function notify(title, message) {
   chrome.notifications.create('oai'+Date.now(), {
     type:'basic', iconUrl:'assets/icons/icon48.png', title, message
@@ -947,12 +1334,99 @@ async function run(msg, sender) {
       return result;
     }
 
+    case 'IMPORT_GROK_SSO': {
+      const result = await importGrokSSO(msg.payload);
+      if (msg.openGrok) await chrome.tabs.create({ url: GROK_URL });
+      notify('Grok SSO 已导入', result.email || 'Cookie 已写入 grok.com');
+      return result;
+    }
+
+    case 'CAPTURE_CREDENTIALS': {
+      const provider = msg.provider || 'all';
+      if (!['all', 'openai', 'claude', 'grok'].includes(provider)) throw new Error('无效的 provider');
+      const result = await captureCredentials(provider);
+      return { ok: true, ...result };
+    }
+
+    case 'IMPORT_CLAUDE_SESSION': {
+      const result = await importClaudeSession(msg.payload);
+      if (msg.openClaude) await chrome.tabs.create({ url: CLAUDE_COOKIE_URLS[0] });
+      notify('Claude session 已导入', 'Cookie 已写入 Claude');
+      return result;
+    }
+
     case 'CLEAR_TOKENS': {
       tokens = [];
       await chrome.storage.local.set({ tokens:[] });
       setBadge(0);
       return { ok:true };
     }
+
+    // ── Google One / Gemini 订阅：一键取 Cookie ──
+    case 'GOOGLE_CAPTURE_CREDENTIALS': {
+      const payload = await GoogleCreds.capture({ script: msg.script });
+      return { ok: true, ...payload };
+    }
+
+    // 探测各站点登录态（优先读标签页真实上下文，无标签页才退 fetch）
+    case 'GOOGLE_PROBE_SITES': {
+      if (msg.reset) GoogleCreds.resetProbeCache();
+      const sites = await GoogleCreds.probeSites(msg.sites, { force: Boolean(msg.reset) });
+      return { ok: true, sites };
+    }
+
+    // 主动打开缺的站点
+    case 'GOOGLE_OPEN_SITES': {
+      const opened = await GoogleCreds.openSites(msg.sites || ['gemini', 'play', 'one', 'accounts']);
+      return { ok: true, opened };
+    }
+
+    // 一条龙：体检 -> 缺就开 -> 回来报告
+    case 'GOOGLE_ENSURE_COMPLETE': {
+      const result = await GoogleCreds.ensureComplete();
+      return { ok: true, ...result };
+    }
+
+    case 'GOOGLE_LAST_EXPORT':
+      return { ok: true, info: await GoogleCreds.getLastExport() };
+
+    case 'GOOGLE_PROBE':
+      return { ok: true, state: await GoogleCreds.probe() };
+
+    // ── Google One / Gemini 订阅：Cookie 注入登录 ──
+    case 'GOOGLE_INJECT_COOKIES': {
+      const parsed = GoogleCreds.parseCookieInput(msg.payload);
+      if (!parsed.length) throw new Error('没解析出任何 Cookie');
+      const result = await GoogleCreds.installCookies(parsed, {
+        clearFirst: msg.clearFirst !== false
+      });
+      let opened = false;
+      if (msg.openTarget) {
+        const target = msg.openTarget === 'subscriptions'
+          ? 'https://play.google.com/store/account/subscriptions'
+          : msg.openTarget === 'gemini' ? 'https://gemini.google.com/app'
+            : 'https://one.google.com/u/0/ai';
+        await chrome.tabs.create({ url: target });
+        opened = true;
+      }
+      if (result.ok) {
+        notify('Google Cookie 已注入', `${result.written.length} 条 · 回滚快照 ${result.backupCount} 条`);
+      }
+      return { ok: result.ok, ...result, opened, parsedCount: parsed.length };
+    }
+
+    case 'GOOGLE_BACKUP_INFO':
+      return { ok: true, info: await GoogleCreds.getBackupInfo() };
+
+    case 'GOOGLE_RESTORE_BACKUP': {
+      const result = await GoogleCreds.restoreBackup();
+      notify('Google 登录态已回滚', `${result.restored} 条 Cookie 已恢复`);
+      return { ok: result.ok, ...result };
+    }
+
+    case 'GOOGLE_CLEAR_BACKUP':
+      await GoogleCreds.clearBackup();
+      return { ok: true };
 
     case 'CLEAR_PENDING':
       await chrome.storage.local.remove(['pendingCode','pendingVerifier']);
@@ -1018,6 +1492,20 @@ async function run(msg, sender) {
 
     case 'ANTIGRAVITY_CLEAR':
       await chrome.storage.session.remove(Object.values(ANTIGRAVITY_KEYS));
+      return { ok: true };
+
+    case 'GROK_GET_STATE':
+      return { ok: true, state: await getGrokState() };
+
+    case 'GROK_GENERATE_AUTH':
+      return { ok: true, url: await generateGrokAuthorizationURL() };
+
+    case 'GROK_EXCHANGE':
+      await exchangeGrokAuthorizationCode(msg.value);
+      return { ok: true };
+
+    case 'GROK_CLEAR':
+      await chrome.storage.session.remove(Object.values(GROK_OAUTH_KEYS));
       return { ok: true };
 
     default: throw new Error('Unknown: '+msg.type);

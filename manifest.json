@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "openai/claude Token Interceptor",
-  "version": "4.2.0",
+  "version": "4.4.0",
   "description": "在浏览器中发起 OpenAI、Claude 和 Antigravity OAuth 并捕获 Token",
   "permissions": [
     "storage",
@@ -20,11 +20,24 @@
     "https://chatgpt.com/*",
     "https://claude.com/*",
     "https://*.claude.com/*",
+    "https://claude.ai/*",
+    "https://*.claude.ai/*",
     "https://platform.claude.com/*",
     "https://console.anthropic.com/*",
     "https://api.anthropic.com/*",
     "https://oauth2.googleapis.com/*",
     "https://www.googleapis.com/*",
+    "https://grok.com/*",
+    "https://*.grok.com/*",
+    "https://auth.x.ai/*",
+    "https://*.x.ai/*",
+    "*://*.google.com/*",
+    "https://google.com/*",
+    "https://gemini.google.com/*",
+    "https://one.google.com/*",
+    "https://play.google.com/*",
+    "https://payments.google.com/*",
+    "https://accounts.google.com/*",
     "http://localhost/*",
     "http://127.0.0.1/*"
   ],
@@ -52,7 +65,9 @@
         "https://auth.openai.com/*",
         "https://*.openai.com/*"
       ],
-      "js": ["src/content.js"],
+      "js": [
+        "src/content.js"
+      ],
       "run_at": "document_start",
       "all_frames": true
     },
@@ -61,14 +76,21 @@
         "https://console.anthropic.com/oauth/code/callback*",
         "https://platform.claude.com/oauth/code/callback*"
       ],
-      "js": ["src/callback.js"],
+      "js": [
+        "src/callback.js"
+      ],
       "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["assets/icons/*", "src/injected.js"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "assets/icons/*",
+        "src/injected.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ]
 }

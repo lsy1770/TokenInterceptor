@@ -7,6 +7,9 @@ let currentClaudeToken = null;
 let claudeTokensRevealed = false;
 let currentAntigravityToken = null;
 let antigravityTokensRevealed = false;
+let currentGrokToken = null;
+let grokTokensRevealed = false;
+let capturedCredentials = null;
 let openAIPollTimer = null;
 let toastTimer = null;
 
@@ -53,6 +56,8 @@ function selectPlatform(platform) {
   void chrome.storage.local.set({ selectedPlatform: platform });
   if (platform === 'claude') void refreshClaudeState();
   if (platform === 'antigravity') void refreshAntigravityState();
+  if (platform === 'grok') void refreshGrokState();
+  if (platform === 'google') void initializeGoogle();
 }
 
 document.querySelectorAll('.platform-button').forEach(button => {
@@ -333,6 +338,31 @@ $('importSession').addEventListener('click', async () => {
   showToast('ChatGPT Session 已导入');
 });
 
+// Grok SSO import flow
+$('importGrokSSO').addEventListener('click', async () => {
+  const payload = $('grokSSOPayload').value.trim();
+  if (!payload) return showToast('请粘贴 Grok sso Cookie 或 Session JSON');
+  const button = $('importGrokSSO');
+  const status = $('grokSSOStatus');
+  setButtonBusy(button, true, '正在导入...', '导入并登录');
+  status.textContent = '正在写入 grok.com Cookie...';
+  const response = await send('IMPORT_GROK_SSO', {
+    payload,
+    openGrok: $('openGrokAfterImport').checked
+  });
+  setButtonBusy(button, false, '', '导入并登录');
+  if (!response.ok) {
+    status.textContent = response.error || '导入失败';
+    status.style.color = 'var(--danger)';
+    return showToast(`导入失败：${response.error}`);
+  }
+  const details = [response.email, response.xUsername, response.expiresAt
+    ? `有效至 ${new Date(response.expiresAt).toLocaleString('zh-CN')}` : ''].filter(Boolean);
+  status.textContent = `导入成功${details.length ? ` · ${details.join(' · ')}` : ''}`;
+  status.style.color = 'var(--success)';
+  showToast('Grok SSO 已导入');
+});
+
 // Claude flow
 function formatTime(value) {
   if (!value) return '-';
@@ -442,6 +472,30 @@ $('claudeClear').addEventListener('click', async () => {
   showToast('Claude 会话数据已清除');
 });
 
+$('importClaudeSession').addEventListener('click', async () => {
+  const payload = $('claudeSessionPayload').value.trim();
+  if (!payload) return showToast('请粘贴 Claude sessionKey 或 Cookie 字符串');
+  const button = $('importClaudeSession');
+  const status = $('claudeSessionStatus');
+  setButtonBusy(button, true, '正在导入...', '导入并登录');
+  status.textContent = '正在写入 Claude Cookie...';
+  const response = await send('IMPORT_CLAUDE_SESSION', {
+    payload,
+    openClaude: $('openClaudeAfterImport').checked
+  });
+  setButtonBusy(button, false, '', '导入并登录');
+  if (!response.ok) {
+    status.textContent = response.error || '导入失败';
+    status.style.color = 'var(--danger)';
+    return showToast(`导入失败：${response.error}`);
+  }
+  const details = [response.expiresAt
+    ? `有效至 ${new Date(response.expiresAt).toLocaleString('zh-CN')}` : ''].filter(Boolean);
+  status.textContent = `导入成功${details.length ? ` · ${details.join(' · ')}` : ''}`;
+  status.style.color = 'var(--success)';
+  showToast('Claude Session 已导入');
+});
+
 // Antigravity flow
 function renderAntigravityState(state) {
   currentAntigravityToken = state.capturedToken || null;
@@ -543,22 +597,463 @@ $('antigravityClear').addEventListener('click', async () => {
   showToast('Antigravity 会话数据已清除');
 });
 
+// Grok OAuth flow
+function renderGrokState(state) {
+  currentGrokToken = state.capturedToken || null;
+  $('grokStateDot').className = 'state-dot';
+
+  if (currentGrokToken) {
+    $('grokStateDot').classList.add('success');
+    $('grokStatusTitle').textContent = 'Token 已获取';
+    $('grokStatusDetail').textContent = '凭据仅保存在本次浏览器会话，可复制 JSON 导出。';
+  } else if (state.exchanging) {
+    $('grokStateDot').classList.add('active');
+    $('grokStatusTitle').textContent = '正在交换 Token';
+    $('grokStatusDetail').textContent = '已识别 authorization code，正在请求 Grok Token 端点。';
+  } else if (state.oauthPending) {
+    $('grokStateDot').classList.add('active');
+    $('grokStatusTitle').textContent = '等待 Grok 授权回调';
+    $('grokStatusDetail').textContent = '回调到 127.0.0.1:51234 后将自动完成 Token 交换。';
+  } else {
+    $('grokStatusTitle').textContent = '未开始';
+    $('grokStatusDetail').textContent = '点击按钮生成 Grok 授权 URL。';
+  }
+
+  $('grokOpenAuth').disabled = state.exchanging;
+  $('grokExchange').disabled = state.exchanging;
+  $('grokURLPanel').hidden = !state.oauthAuthorizeURL;
+  $('grokURL').value = state.oauthAuthorizeURL || '';
+  $('grokTokenPanel').hidden = !currentGrokToken;
+  $('grokError').hidden = !state.error;
+  $('grokError').textContent = state.error || '';
+
+  if (currentGrokToken) {
+    $('grokEmail').textContent = currentGrokToken.email || '-';
+    $('grokName').textContent = currentGrokToken.name || '-';
+    $('grokAccessToken').value = currentGrokToken.access_token || '';
+    $('grokRefreshToken').value = currentGrokToken.refresh_token || '';
+    $('grokIDToken').value = currentGrokToken.id_token || '';
+    $('grokExpires').textContent = currentGrokToken.expires_in
+      ? `${currentGrokToken.expires_in} 秒`
+      : '-';
+    $('grokCapturedAt').textContent = formatTime(currentGrokToken.captured_at);
+  }
+}
+
+async function refreshGrokState() {
+  const response = await send('GROK_GET_STATE');
+  if (!response.ok) {
+    $('grokError').hidden = false;
+    $('grokError').textContent = response.error || '读取 Grok 状态失败';
+    return;
+  }
+  renderGrokState(response.state);
+}
+
+$('grokOpenAuth').addEventListener('click', async () => {
+  const button = $('grokOpenAuth');
+  setButtonBusy(button, true, '正在生成...', '生成并打开授权 URL');
+  const response = await send('GROK_GENERATE_AUTH');
+  setButtonBusy(button, false, '', '生成并打开授权 URL');
+  await refreshGrokState();
+  showToast(response.ok ? 'Grok 授权页已打开' : `生成失败：${response.error}`);
+});
+
+$('grokCopyURL').addEventListener('click', () => (
+  copyText($('grokURL').value, 'Grok 授权 URL 已复制')
+));
+
+$('grokExchange').addEventListener('click', async () => {
+  const value = $('grokCode').value.trim();
+  if (!value) return showToast('请粘贴 Grok authorization code 或回调 URL');
+  const response = await send('GROK_EXCHANGE', { value });
+  await refreshGrokState();
+  showToast(response.ok ? 'Grok Token 交换成功' : `交换失败：${response.error}`);
+});
+
+$('grokReveal').addEventListener('click', () => {
+  grokTokensRevealed = !grokTokensRevealed;
+  const type = grokTokensRevealed ? 'text' : 'password';
+  $('grokAccessToken').type = type;
+  $('grokRefreshToken').type = type;
+  $('grokIDToken').type = type;
+  $('grokReveal').textContent = grokTokensRevealed ? '隐藏 Token' : '显示 Token';
+});
+
+$('grokCopy').addEventListener('click', () => {
+  if (currentGrokToken) {
+    void copyText(JSON.stringify(currentGrokToken, null, 2), 'Grok Token JSON 已复制');
+  }
+});
+
+$('grokClear').addEventListener('click', async () => {
+  await send('GROK_CLEAR');
+  currentGrokToken = null;
+  grokTokensRevealed = false;
+  $('grokAccessToken').type = 'password';
+  $('grokRefreshToken').type = 'password';
+  $('grokIDToken').type = 'password';
+  $('grokReveal').textContent = '显示 Token';
+  await refreshGrokState();
+  showToast('Grok 会话数据已清除');
+});
+
+// Google One / Gemini 订阅凭据
+let googleCaptureResult = null;
+
+document.querySelectorAll('[data-google-tab]').forEach(button => {
+  button.addEventListener('click', () => {
+    document.querySelectorAll('[data-google-tab]').forEach(item => item.classList.remove('active'));
+    document.querySelectorAll('#platform-google .subtab-panel').forEach(panel => panel.classList.remove('active'));
+    button.classList.add('active');
+    $(`google-tab-${button.dataset.googleTab}`).classList.add('active');
+  });
+});
+
+function setGoogleStatus(text, tone) {
+  $('googleStatus').textContent = text;
+  const status = $('googleExportStatus');
+  if (status) {
+    status.style.color = tone === 'error' ? 'var(--danger)'
+      : tone === 'warning' ? 'var(--warning)' : 'var(--success)';
+  }
+}
+
+function renderGoogleReadout(state) {
+  const readout = $('googleReadout');
+  if (!state) {
+    readout.hidden = true;
+    return;
+  }
+  readout.hidden = false;
+  $('googleAccount').textContent = state.email || (state.loggedIn ? '已登录（未解析到邮箱）' : '未登录');
+  $('googleGaia').textContent = state.gaia || '-';
+  const caps = [];
+  caps.push(state.hasSapisid ? 'SAPISID ✓' : 'SAPISID ✗');
+  caps.push(state.hasStrong ? '强会话 ✓' : '强会话 ✗');
+  if (state.finalUrl && /signin/.test(state.finalUrl)) caps.push('需登录');
+  $('googleCapability').textContent = caps.join(' · ');
+}
+
+async function probeGoogle() {
+  const response = await send('GOOGLE_PROBE');
+  if (!response.ok) {
+    setGoogleStatus('检测失败', 'error');
+    $('googleExportStatus').textContent = response.error || '检测失败';
+    return;
+  }
+  renderGoogleReadout(response.state);
+  setGoogleStatus(response.state && response.state.hasSapisid ? '凭据齐备' : '缺少强会话');
+}
+
+$('googleProbe').addEventListener('click', () => { void probeGoogle(); });
+
+const SITE_LABELS = {
+  gemini: 'Gemini',
+  play: 'Play 订阅页',
+  one: 'Google One',
+  accounts: '账号中心',
+};
+
+let googlePendingSites = [];
+
+function renderGoogleSites(sites, hintText) {
+  const panel = $('googleSitePanel');
+  const list = $('googleSiteList');
+  if (!sites || !sites.length) {
+    panel.hidden = true;
+    list.innerHTML = '';
+    return;
+  }
+  panel.hidden = false;
+  googlePendingSites = sites.filter(s => !s.ok).map(s => s.key);
+  $('googleSiteHint').textContent = hintText
+    || (googlePendingSites.length ? `${googlePendingSites.length} 个站点待登录` : '全部就绪');
+  list.innerHTML = sites.map(site => {
+    const ok = site && site.ok;
+    const label = SITE_LABELS[site.key] || site.key;
+    const note = site.hint || (site.error ? site.error : '');
+    return `<li class="${ok ? 'ok' : ''}"><span class="site-dot"></span>`
+      + `<span class="site-name">${label}</span>`
+      + `<span class="site-note">${note}</span></li>`;
+  }).join('');
+}
+
+$('googleCapture').addEventListener('click', async () => {
+  const button = $('googleCapture');
+  setButtonBusy(button, true, '正在读取…', '一键取 Cookie');
+  $('googleExportStatus').textContent = '正在读取 google.com 域下的登录 Cookie…';
+  const response = await send('GOOGLE_CAPTURE_CREDENTIALS', {});
+  setButtonBusy(button, false, '', '一键取 Cookie');
+  if (!response.ok) {
+    setGoogleStatus('导出失败', 'error');
+    $('googleExportStatus').textContent = response.error || '导出失败';
+    return;
+  }
+  // Cookie 不全：先看实测结果，再把真正不通的站点打开
+  if (response.needsLogin) {
+    const probed = response.probedSites || [];
+    const opened = response.openedSites || [];
+    const rows = (probed.length ? probed : opened.map(s => ({
+      key: s.key,
+      ok: false,
+      hint: s.error ? `打开失败：${s.error}` : '已打开，请在该页面完成登录',
+    })));
+    renderGoogleSites(rows, '需要登录');
+    setGoogleStatus('Cookie 不完整', 'warning');
+    $('googleExportStatus').textContent = response.message || 'Cookie 不完整';
+    showToast(response.message || 'Cookie 不完整');
+    return;
+  }
+  await applyGoogleCapture(response);
+});
+
+async function applyGoogleCapture(response) {
+  googleCaptureResult = response;
+  $('googleCookiesTxt').value = response.cookiesTxt || '';
+  $('googleCookieHeader').value = response.cookieHeader || '';
+  $('googleCredsJSON').value = JSON.stringify({
+    provider: response.provider,
+    capturedAt: response.capturedAt,
+    purpose: response.purpose,
+    summary: response.summary,
+    credentials: response.credentials,
+    cookies: response.cookies
+  }, null, 2);
+  $('googlePythonSnippet').value = response.python || '';
+
+  const summary = response.summary || {};
+  const bucketText = Object.entries(summary.buckets || {})
+    .map(([key, names]) => `${key}:${names.length}`).join(' ');
+  const criticalMissing = summary.criticalMissing || [];
+  $('googleExportStatus').textContent = [
+    `共 ${summary.total || 0} 条 Cookie`,
+    `判定 ${summary.verdict || '?'}`,
+    bucketText,
+    // 关键项缺了单独点出来：这些缺一个，Python 侧就会掉进登录页
+    criticalMissing.length ? `关键缺：${criticalMissing.join(' / ')}` : '关键项齐全',
+    summary.canCancel ? '可取消续费' : `缺：${(summary.missing || []).join(' / ')}`
+  ].filter(Boolean).join(' · ');
+
+  // PSIDTS 是否在导出前被刷新过（旧值会让脚本一跑就 302 到登录页）
+  const refresh = response.sessionRefresh || {};
+  if (refresh.rotated && refresh.rotated.length) {
+    $('googleExportStatus').textContent += ` · 已刷新 ${refresh.rotated.join('/')}`;
+  }
+
+  setGoogleStatus(summary.canCancel && !criticalMissing.length ? '已导出' : '部分可用',
+    summary.canCancel && !criticalMissing.length ? 'ok' : 'warning');
+  renderGoogleReadout({
+    hasSapisid: summary.hasSapisid,
+    hasStrong: summary.hasStrong,
+    loggedIn: true
+  });
+  showToast(`已取到 ${summary.total || 0} 条 Google Cookie`);
+}
+
+$('googleRetryCapture').addEventListener('click', async () => {
+  const button = $('googleRetryCapture');
+  setButtonBusy(button, true, '正在核对…', '我已登录，继续取 Cookie');
+  // force=true：绕过 60s 缓存，按标签页真实状态重新判一次
+  const probe = await send('GOOGLE_PROBE_SITES', { reset: true });
+  if (probe.ok) renderGoogleSites(probe.sites, undefined);
+  const response = await send('GOOGLE_CAPTURE_CREDENTIALS', {
+    retried: true,
+    force: true,
+    autoComplete: true,
+  });
+  setButtonBusy(button, false, '', '我已登录，继续取 Cookie');
+  if (!response.ok) {
+    $('googleExportStatus').textContent = response.error || '仍然取不到 Cookie';
+    setGoogleStatus('导出失败', 'error');
+    return;
+  }
+  if (response.needsLogin) {
+    const rows = (response.probedSites || []).map(s => ({ key: s.key, ok: s.ok, hint: s.hint }));
+    renderGoogleSites(rows, '需要登录');
+    setGoogleStatus('仍未就绪', 'warning');
+    $('googleExportStatus').textContent = response.message || '仍未就绪';
+    showToast(response.message || '仍未就绪');
+    return;
+  }
+  await applyGoogleCapture(response);
+  const rows = (response.probedSites || []).map(s => ({ key: s.key, ok: s.ok, hint: s.hint }));
+  renderGoogleSites(rows, rows.length ? '全部就绪' : undefined);
+  document.querySelector('[data-google-tab="export"]').click();
+});
+
+$('googleOpenMissing').addEventListener('click', async () => {
+  const keys = googlePendingSites.length ? googlePendingSites : ['gemini', 'play', 'one', 'accounts'];
+  const response = await send('GOOGLE_OPEN_SITES', { sites: keys });
+  if (!response.ok) return showToast(`打开失败：${response.error}`);
+  showToast(`已打开 ${response.opened.length} 个站点`);
+});
+
+$('googleCopyTxt').addEventListener('click', () => {
+  if (!$('googleCookiesTxt').value) return showToast('先点「一键取 Cookie」');
+  void copyText($('googleCookiesTxt').value, 'cookies.txt 已复制');
+});
+
+$('googleCopyHeader').addEventListener('click', () => {
+  if (!$('googleCookieHeader').value) return showToast('先点「一键取 Cookie」');
+  void copyText($('googleCookieHeader').value, 'Cookie Header 已复制');
+});
+
+$('googleCopyJson').addEventListener('click', () => {
+  if (!$('googleCredsJSON').value) return showToast('先点「一键取 Cookie」');
+  void copyText($('googleCredsJSON').value, 'JSON 已复制');
+});
+
+$('googleCopyPython').addEventListener('click', () => {
+  if (!$('googlePythonSnippet').value) return showToast('先点「一键取 Cookie」');
+  void copyText($('googlePythonSnippet').value, 'Python 片段已复制');
+});
+
+$('googleSaveTxt').addEventListener('click', () => {
+  if (!googleCaptureResult || !googleCaptureResult.cookiesTxt) return showToast('先点「一键取 Cookie」');
+  download(googleCaptureResult.cookiesTxt, `google_cookies_${Date.now()}.txt`, 'text/plain');
+});
+
+async function refreshGoogleBackupInfo() {
+  const response = await send('GOOGLE_BACKUP_INFO');
+  const info = response.ok ? response.info : null;
+  $('googleBackupInfo').textContent = info && info.exists
+    ? `${info.count} 条 · ${new Date(info.savedAt).toLocaleString('zh-CN', { hour12: false })}`
+    : '无';
+}
+
+$('googleInject').addEventListener('click', async () => {
+  const payload = $('googleInjectPayload').value.trim();
+  const status = $('googleInjectStatus');
+  if (!payload) return showToast('请粘贴 cookie 内容');
+  const button = $('googleInject');
+  setButtonBusy(button, true, '正在注入…', '注入并登录');
+  status.textContent = '正在写入 Cookie…';
+  status.style.color = '';
+  const response = await send('GOOGLE_INJECT_COOKIES', {
+    payload,
+    clearFirst: $('googleClearBeforeInject').checked,
+    openTarget: $('googleOpenAfterInject').checked ? 'subscriptions' : ''
+  });
+  setButtonBusy(button, false, '', '注入并登录');
+  if (!response.ok) {
+    status.textContent = response.error || (response.errors || []).join('；') || '注入失败';
+    status.style.color = 'var(--danger)';
+    setGoogleStatus('注入失败', 'error');
+    return;
+  }
+  status.style.color = 'var(--success)';
+  status.textContent = `写入 ${response.written.length} 条（覆盖 ${response.overwritten.length} 条）`
+    + `${response.hasSapisid ? ' · SAPISID 已生效' : ' · 未检测到 SAPISID'}`
+    + `${response.opened ? ' · 已打开订阅页' : ''}`;
+  setGoogleStatus('已注入', 'ok');
+  await refreshGoogleBackupInfo();
+  await probeGoogle();
+  showToast('Google Cookie 已注入');
+});
+
+$('googleRestore').addEventListener('click', async () => {
+  const response = await send('GOOGLE_RESTORE_BACKUP');
+  if (!response.ok) return showToast(`回滚失败：${response.error}`);
+  showToast(`已恢复 ${response.restored} 条 Cookie`);
+  await refreshGoogleBackupInfo();
+  await probeGoogle();
+});
+
+$('googleClearBackup').addEventListener('click', async () => {
+  await send('GOOGLE_CLEAR_BACKUP');
+  await refreshGoogleBackupInfo();
+  showToast('快照已清除');
+});
+
+async function initializeGoogle() {
+  const response = await send('GOOGLE_LAST_EXPORT');
+  if (response.ok && response.info) {
+    $('googleExportStatus').textContent =
+      `上次导出：${new Date(response.info.capturedAt).toLocaleString('zh-CN', { hour12: false })}`
+      + ` · ${response.info.summary ? response.info.summary.total : 0} 条`;
+  }
+  await refreshGoogleBackupInfo();
+  await probeGoogle();
+}
+
+// Credential capture
+function renderCredentials(result) {
+  capturedCredentials = {
+    capturedAt: result.capturedAt,
+    ...(result.credentials || {})
+  };
+  $('credentialsJSON').value = JSON.stringify(capturedCredentials, null, 2);
+  const capturedCount = Object.keys(result.credentials || {}).length;
+  const errorCount = Object.keys(result.errors || {}).length;
+  if (capturedCount && errorCount) {
+    $('credentialStatus').textContent = `${capturedCount} 项成功 · ${errorCount} 项失败`;
+  } else if (capturedCount) {
+    $('credentialStatus').textContent = `已捕获 ${capturedCount} 项`;
+  } else if (errorCount) {
+    $('credentialStatus').textContent = '捕获失败';
+  } else {
+    $('credentialStatus').textContent = '就绪';
+  }
+}
+
+async function doCapture(provider) {
+  const status = $('credentialsStatus');
+  status.textContent = '正在捕获…';
+  const response = await send('CAPTURE_CREDENTIALS', { provider });
+  if (!response.ok) {
+    status.textContent = response.error || '捕获失败';
+    status.style.color = 'var(--danger)';
+    return;
+  }
+  renderCredentials(response);
+  const errors = Object.values(response.errors || {});
+  status.textContent = errors.length ? `部分失败：${errors.join('；')}` : '捕获完成';
+  status.style.color = errors.length ? 'var(--warning)' : 'var(--success)';
+}
+
+$('captureAllCredentials').addEventListener('click', () => doCapture('all'));
+$('captureOpenAI').addEventListener('click', () => doCapture('openai'));
+$('captureClaude').addEventListener('click', () => doCapture('claude'));
+$('captureGrok').addEventListener('click', () => doCapture('grok'));
+
+$('copyCredentials').addEventListener('click', () => {
+  if (!capturedCredentials) return showToast('尚未捕获凭据');
+  void copyText(JSON.stringify(capturedCredentials, null, 2), '凭据 JSON 已复制');
+});
+
+$('exportCredentials').addEventListener('click', () => {
+  if (!capturedCredentials) return showToast('尚未捕获凭据');
+  download(JSON.stringify(capturedCredentials, null, 2), `credentials_${Date.now()}.json`, 'application/json');
+});
+
+$('clearCredentials').addEventListener('click', () => {
+  capturedCredentials = null;
+  $('credentialsJSON').value = '';
+  $('credentialStatus').textContent = '就绪';
+  $('credentialsStatus').textContent = '';
+  showToast('已清除凭据');
+});
+
 chrome.storage.onChanged.addListener((_changes, areaName) => {
   if (areaName === 'session') {
     void refreshClaudeState();
     void refreshAntigravityState();
+    void refreshGrokState();
   }
 });
 
 async function initialize() {
   const stored = await chrome.storage.local.get('selectedPlatform');
-  const validPlatforms = new Set(['openai', 'claude', 'antigravity']);
+  const validPlatforms = new Set(['openai', 'claude', 'antigravity', 'grok', 'google', 'credentials']);
   selectPlatform(validPlatforms.has(stored.selectedPlatform) ? stored.selectedPlatform : 'openai');
   await Promise.all([
     initializeOpenAIURL(),
     loadOpenAITokens(),
     refreshClaudeState(),
-    refreshAntigravityState()
+    refreshAntigravityState(),
+    refreshGrokState(),
+    refreshGoogleBackupInfo()
   ]);
   setInterval(loadOpenAITokens, 2000);
 }

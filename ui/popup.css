@@ -26,6 +26,12 @@
   --claude-rgb: 224, 129, 85;
   --antigravity: #5b8dff;
   --antigravity-rgb: 91, 141, 255;
+  --grok: #c084fc;
+  --grok-rgb: 192, 132, 252;
+  --googleone: #60a5fa;
+  --googleone-rgb: 96, 165, 250;
+  --credential: #e8b84c;
+  --credential-rgb: 232, 184, 76;
 
   /* semantic */
   --danger: #f87171;
@@ -60,6 +66,24 @@ body[data-platform="antigravity"] {
   --accent: var(--antigravity);
   --accent-rgb: var(--antigravity-rgb);
   --on-accent: #060c1c;
+}
+
+body[data-platform="grok"] {
+  --accent: var(--grok);
+  --accent-rgb: var(--grok-rgb);
+  --on-accent: #160a1e;
+}
+
+body[data-platform="google"] {
+  --accent: var(--googleone);
+  --accent-rgb: var(--googleone-rgb);
+  --on-accent: #04121f;
+}
+
+body[data-platform="credentials"] {
+  --accent: var(--credential);
+  --accent-rgb: var(--credential-rgb);
+  --on-accent: #1d1506;
 }
 
 * { box-sizing: border-box; }
@@ -218,6 +242,90 @@ button, input, textarea { font: inherit; color: inherit; }
 .platform-button[data-platform="antigravity"].active .platform-dot {
   color: var(--antigravity);
   box-shadow: 0 0 8px rgba(var(--antigravity-rgb), 0.7);
+}
+
+.platform-button[data-platform="grok"].active .platform-dot {
+  color: var(--grok);
+  box-shadow: 0 0 8px rgba(var(--grok-rgb), 0.7);
+}
+
+.platform-button[data-platform="credentials"].active .platform-dot {
+  color: var(--credential);
+  box-shadow: 0 0 8px rgba(var(--credential-rgb), 0.7);
+}
+
+.platform-button[data-platform="google"].active .platform-dot {
+  color: var(--googleone);
+  box-shadow: 0 0 8px rgba(var(--googleone-rgb), 0.7);
+}
+
+/* Google One 面板：站点登录态清单 */
+.site-panel {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(var(--warning-rgb), 0.35);
+  border-radius: var(--r-md);
+  background: rgba(var(--warning-rgb), 0.07);
+}
+
+.site-list {
+  margin: 8px 0 10px;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.site-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.site-list .site-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--warning);
+  box-shadow: 0 0 6px rgba(var(--warning-rgb), 0.6);
+}
+
+.site-list li.ok .site-dot {
+  background: var(--success);
+  box-shadow: 0 0 6px rgba(var(--success-rgb), 0.6);
+}
+
+.site-list .site-name { color: var(--text); font-weight: 550; }
+
+.site-list .site-note {
+  color: var(--text-3);
+  font: 500 10.5px/1.4 var(--mono);
+}
+
+/* Google One 面板：账号信息只读块 */
+.google-readout {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.google-readout .token-meta { margin: 0; }
+
+.google-readout .token-meta + .token-meta { margin-top: 6px; }
+
+.google-readout strong {
+  max-width: 62%;
+  overflow: hidden;
+  font: 500 11.5px/1.4 var(--mono);
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 /* ---------- scroll region ---------- */

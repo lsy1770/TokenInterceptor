@@ -19,7 +19,7 @@
         <h1>Token Interceptor</h1>
         <p>OAuth 凭据获取工具</p>
       </div>
-      <span class="version">v4.2</span>
+      <span class="version">v4.3</span>
     </header>
 
     <nav class="platform-switch" aria-label="选择授权平台">
@@ -34,6 +34,18 @@
       <button class="platform-button" data-platform="antigravity" type="button">
         <span class="platform-dot"></span>
         <strong>Antigravity</strong>
+      </button>
+      <button class="platform-button" data-platform="grok" type="button">
+        <span class="platform-dot"></span>
+        <strong>Grok</strong>
+      </button>
+      <button class="platform-button" data-platform="google" type="button">
+        <span class="platform-dot"></span>
+        <strong>Google One</strong>
+      </button>
+      <button class="platform-button" data-platform="credentials" type="button">
+        <span class="platform-dot"></span>
+        <strong>凭据</strong>
       </button>
     </nav>
 
@@ -156,6 +168,16 @@
           </div>
         </section>
         <p id="claudeError" class="error-message" hidden></p>
+
+        <div class="divider"><span>Session 登录</span></div>
+
+        <section class="form-panel">
+          <div class="notice info">在本机写入 Claude 的 sessionKey 等登录 Cookie。导入会覆盖当前 Claude 登录状态。</div>
+          <label class="field"><span>sessionKey / Cookie 字符串 / JSON</span><textarea id="claudeSessionPayload" rows="5" placeholder="sk-ant-sid01-..." spellcheck="false"></textarea></label>
+          <label class="check-row"><input id="openClaudeAfterImport" type="checkbox" checked><span>导入成功后打开 Claude</span></label>
+          <button id="importClaudeSession" class="button button-primary button-wide" type="button">导入并登录</button>
+          <p id="claudeSessionStatus" class="inline-status"></p>
+        </section>
       </section>
 
       <section id="platform-antigravity" class="platform-panel">
@@ -214,6 +236,173 @@
           </div>
         </section>
         <p id="antigravityError" class="error-message" hidden></p>
+      </section>
+
+      <section id="platform-grok" class="platform-panel">
+        <section class="flow-card">
+          <div class="section-heading">
+            <div>
+              <span class="section-kicker">Grok · PKCE</span>
+              <h2>获取 Grok Token</h2>
+            </div>
+            <span id="grokStateDot" class="state-dot"></span>
+          </div>
+          <p class="section-description">通过 Grok 官方授权页完成 PKCE，自动捕获 loopback 回调并换取 Token。</p>
+          <button id="grokOpenAuth" class="button button-primary button-wide" type="button">生成并打开授权 URL</button>
+          <div id="grokURLPanel" class="url-panel" hidden>
+            <div class="field-label"><span>授权 URL</span><span>当前会话</span></div>
+            <textarea id="grokURL" rows="2" readonly></textarea>
+            <button id="grokCopyURL" class="button button-secondary button-wide" type="button">复制授权 URL</button>
+          </div>
+        </section>
+
+        <section class="status-card" aria-live="polite">
+          <span id="grokStatusIcon" class="status-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="8.5"/><path d="M12 7.8v4.6l3 1.8"/>
+            </svg>
+          </span>
+          <div>
+            <strong id="grokStatusTitle">未开始</strong>
+            <p id="grokStatusDetail">点击按钮生成 Grok 授权 URL。</p>
+          </div>
+        </section>
+
+        <section class="form-panel">
+          <label class="field">
+            <span>未自动识别时粘贴 authorization code</span>
+            <textarea id="grokCode" rows="3" placeholder="授权码或 http://127.0.0.1:51234/callback?... 完整 URL"></textarea>
+          </label>
+          <button id="grokExchange" class="button button-secondary button-wide" type="button">手动交换 Token</button>
+        </section>
+
+        <section id="grokTokenPanel" class="token-detail" hidden>
+          <div class="token-detail-heading">
+            <div><span class="section-kicker">Captured</span><h3>Grok Token</h3></div>
+            <span id="grokCapturedAt" class="timestamp">-</span>
+          </div>
+          <div class="token-meta"><span>账号</span><strong id="grokEmail">-</strong></div>
+          <div class="token-meta"><span>名称</span><strong id="grokName">-</strong></div>
+          <label class="field"><span>access_token</span><input id="grokAccessToken" type="password" readonly></label>
+          <label class="field"><span>refresh_token</span><input id="grokRefreshToken" type="password" readonly></label>
+          <label class="field"><span>id_token</span><input id="grokIDToken" type="password" readonly></label>
+          <div class="token-meta"><span>有效期</span><strong id="grokExpires">-</strong></div>
+          <div class="button-row">
+            <button id="grokReveal" class="button button-secondary" type="button">显示 Token</button>
+            <button id="grokCopy" class="button button-primary" type="button">复制 JSON</button>
+            <button id="grokClear" class="button button-danger" type="button">清除</button>
+          </div>
+        </section>
+        <p id="grokError" class="error-message" hidden></p>
+
+        <div class="divider"><span>SSO Cookie 登录</span></div>
+
+        <section class="form-panel">
+          <div class="notice info">粘贴 Grok 的 <code>sso</code> Cookie 值、完整 Cookie 字符串，或 /api/auth/session 返回的 JSON。</div>
+          <label class="field"><span>sso Cookie / Cookie 字符串 / Session JSON</span><textarea id="grokSSOPayload" rows="6" placeholder="eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzZXNzaW9uX2lkIjoi..." spellcheck="false"></textarea></label>
+          <label class="check-row"><input id="openGrokAfterImport" type="checkbox" checked><span>导入成功后打开 Grok</span></label>
+          <button id="importGrokSSO" class="button button-primary button-wide" type="button">导入并登录</button>
+          <p id="grokSSOStatus" class="inline-status"></p>
+        </section>
+      </section>
+
+      <section id="platform-google" class="platform-panel">
+        <section class="flow-card">
+          <div class="section-heading">
+            <div>
+              <span class="section-kicker">Google One · Gemini</span>
+              <h2>订阅凭据</h2>
+            </div>
+            <span class="status-pill"><i></i><span id="googleStatus">就绪</span></span>
+          </div>
+          <p class="section-description">一键导出「取消订阅 / 开通」所需的最小 Cookie 集，或把 Cookie 注入当前浏览器直接登录该账号。Cookie 不全时会自动打开对应网站补全会话。</p>
+          <div class="button-row compact">
+            <button id="googleCapture" class="button button-primary" type="button">一键取 Cookie</button>
+            <button id="googleProbe" class="button button-secondary" type="button">检测当前账号</button>
+          </div>
+          <div id="googleSitePanel" class="site-panel" hidden>
+            <div class="field-label"><span>站点登录态</span><span id="googleSiteHint">需要登录</span></div>
+            <ul id="googleSiteList" class="site-list"></ul>
+            <div class="button-row compact">
+              <button id="googleRetryCapture" class="button button-primary" type="button">我已登录，继续取 Cookie</button>
+              <button id="googleOpenMissing" class="button button-secondary" type="button">再打开缺失站点</button>
+            </div>
+          </div>
+          <div class="google-readout" id="googleReadout" hidden>
+            <div class="token-meta"><span>账号</span><strong id="googleAccount">-</strong></div>
+            <div class="token-meta"><span>GAIA</span><strong id="googleGaia">-</strong></div>
+            <div class="token-meta"><span>能力</span><strong id="googleCapability">-</strong></div>
+          </div>
+        </section>
+
+        <nav class="subtabs" aria-label="Google 功能">
+          <button class="subtab active" data-google-tab="export" type="button">导出</button>
+          <button class="subtab" data-google-tab="inject" type="button">注入登录</button>
+        </nav>
+
+        <section id="google-tab-export" class="subtab-panel active">
+          <section class="form-panel">
+            <label class="field"><span>Netscape cookies.txt（直接喂给 google_one_daichong.py --cookie-file）</span><textarea id="googleCookiesTxt" rows="7" readonly placeholder="点击「一键取 Cookie」后显示…" spellcheck="false"></textarea></label>
+            <div class="button-row compact">
+              <button id="googleCopyTxt" class="button button-secondary" type="button">复制 cookies.txt</button>
+              <button id="googleSaveTxt" class="button button-primary" type="button">下载 cookies.txt</button>
+            </div>
+            <div class="divider"><span>其它格式</span></div>
+            <label class="field"><span>Cookie Header 串</span><textarea id="googleCookieHeader" rows="3" readonly spellcheck="false"></textarea></label>
+            <label class="field"><span>导出 JSON（完整 cookie 数组 + 元信息）</span><textarea id="googleCredsJSON" rows="5" readonly spellcheck="false"></textarea></label>
+            <label class="field"><span>Python 直贴片段</span><textarea id="googlePythonSnippet" rows="5" readonly spellcheck="false"></textarea></label>
+            <div class="button-row">
+              <button id="googleCopyHeader" class="button button-secondary" type="button">复制 Header</button>
+              <button id="googleCopyJson" class="button button-secondary" type="button">复制 JSON</button>
+              <button id="googleCopyPython" class="button button-secondary" type="button">复制 Python</button>
+            </div>
+            <p id="googleExportStatus" class="inline-status"></p>
+          </section>
+        </section>
+
+        <section id="google-tab-inject" class="subtab-panel form-panel">
+          <div class="notice warning">注入会覆盖当前浏览器里的 Google 登录态。写入前会自动做一份快照，任何一步不对可以一键回滚。</div>
+          <label class="field"><span>cookies.txt / Cookie 串 / 导出 JSON</span><textarea id="googleInjectPayload" rows="7" placeholder="粘贴上一步导出的内容，或另一台机器上抓的 cookies.txt" spellcheck="false"></textarea></label>
+          <label class="check-row"><input id="googleClearBeforeInject" type="checkbox" checked><span>先清理当前 Google 会话 Cookie（防串号）</span></label>
+          <label class="check-row"><input id="googleOpenAfterInject" type="checkbox" checked><span>注入后打开 Play 订阅页</span></label>
+          <button id="googleInject" class="button button-primary button-wide" type="button">注入并登录</button>
+          <p id="googleInjectStatus" class="inline-status"></p>
+          <div class="divider"><span>回滚</span></div>
+          <div class="token-meta"><span>快照</span><strong id="googleBackupInfo">无</strong></div>
+          <div class="button-row">
+            <button id="googleRestore" class="button button-secondary" type="button">恢复上次登录态</button>
+            <button id="googleClearBackup" class="button button-quiet" type="button">清除快照</button>
+          </div>
+        </section>
+      </section>
+
+      <section id="platform-credentials" class="platform-panel">
+        <section class="flow-card">
+          <div class="section-heading">
+            <div>
+              <span class="section-kicker">Credentials</span>
+              <h2>捕获账户凭据</h2>
+            </div>
+            <span class="status-pill"><i></i><span id="credentialStatus">就绪</span></span>
+          </div>
+          <p class="section-description">从当前浏览器已登录的站点读取账户凭据，一键导出 JSON。读取仅在本地完成，不会上传。</p>
+          <button id="captureAllCredentials" class="button button-primary button-wide" type="button">捕获全部凭据</button>
+          <div class="button-row compact">
+            <button id="captureOpenAI" class="button button-secondary" type="button">OpenAI</button>
+            <button id="captureClaude" class="button button-secondary" type="button">Claude</button>
+            <button id="captureGrok" class="button button-secondary" type="button">Grok</button>
+          </div>
+        </section>
+
+        <section class="form-panel">
+          <label class="field"><span>已捕获凭据（JSON）</span><textarea id="credentialsJSON" rows="10" readonly placeholder="点击上方按钮捕获…" spellcheck="false"></textarea></label>
+          <div class="button-row">
+            <button id="copyCredentials" class="button button-secondary" type="button">复制 JSON</button>
+            <button id="exportCredentials" class="button button-primary" type="button">导出 JSON</button>
+            <button id="clearCredentials" class="button button-danger" type="button">清除</button>
+          </div>
+          <p id="credentialsStatus" class="inline-status"></p>
+        </section>
       </section>
     </div>
   </div>

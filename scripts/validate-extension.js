@@ -44,6 +44,8 @@ for (const file of new Set(referencedFiles)) existing(file);
 
 assert(manifest.manifest_version === 3, 'Only Manifest V3 is supported');
 assert(manifest.name === 'openai/claude Token Interceptor', 'Unexpected extension name');
+assert(manifest.host_permissions?.includes('*://*.google.com/*'),
+  'Google Cookie capture needs HTTP and HTTPS host access to include non-Secure SID/HSID/APISID cookies');
 
 const javascriptFiles = [
   'src/background.js',
@@ -53,6 +55,10 @@ const javascriptFiles = [
   'src/oauth/claude-flow.js',
   'src/oauth/claude-token-parser.js',
   'src/oauth/antigravity.js',
+  'src/oauth/grok-sso.js',
+  'src/oauth/grok-oauth.js',
+  'src/oauth/claude-session.js',
+  'src/oauth/creds-google.js',
   'ui/popup.js'
 ];
 for (const file of javascriptFiles) {

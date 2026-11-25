@@ -1,6 +1,6 @@
 {
   "name": "openai-claude-token-interceptor",
-  "version": "4.2.0",
+  "version": "4.4.0",
   "private": true,
   "description": "A zero-dependency Manifest V3 extension for OpenAI, Claude and Antigravity OAuth tokens.",
   "keywords": [
@@ -9,12 +9,14 @@
     "oauth",
     "openai",
     "claude",
-    "antigravity"
+    "antigravity",
+    "google-one"
   ],
   "scripts": {
     "check": "node scripts/validate-extension.js",
-    "test": "node tests/claude-flow.test.js && node tests/claude-token-parser.test.js && node tests/antigravity.test.js && node tests/background-smoke.test.js",
-    "verify": "npm run check && npm test"
+    "test": "node tests/claude-flow.test.js && node tests/claude-token-parser.test.js && node tests/antigravity.test.js && node tests/grok-sso.test.js && node tests/grok-oauth.test.js && node tests/claude-session.test.js && node tests/creds-google.test.js && node tests/creds-google-session.test.js && node tests/background-smoke.test.js",
+    "verify": "npm run check && npm test",
+    "package": "node scripts/package-extension.js"
   },
   "engines": {
     "node": ">=20"
