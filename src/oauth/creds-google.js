@@ -53,12 +53,17 @@ const GoogleCreds = (() => {
   // 很多账号根本不会下发 SID / HSID，所以缺它们只标「degraded」，不直接判死。
   const STRONG_SESSION_NAMES = ['SID', 'HSID', 'SSID'];
 
-  // 这几个缺了就会让 play.google.com 直接降到登录页，必须单独兜底抓取。
+  // 这几个缺了就会让 play.google.com / one.google.com / payments.google.com 掉到登录页。
   // 实测：SID + HSID 共 170 字符，决定 Play 能不能用。
   const CRITICAL_COOKIE_NAMES = [
     'SID', 'HSID', 'SSID', 'APISID', 'SAPISID',
     '__Secure-1PSID', '__Secure-3PSID',
     '__Secure-1PAPISID', '__Secure-3PAPISID',
+  ];
+
+  // Google 实时会话校验令牌（任一存在即可）
+  const SESSION_CHECK_COOKIE_NAMES = [
+    'SIDCC', '__Secure-1PSIDCC', '__Secure-3PSIDCC',
   ];
 
   // 需要登录态的站点点位（用于自动补全：打开这些站点让浏览器自己种 cookie）
@@ -69,18 +74,25 @@ const GoogleCreds = (() => {
   // SID / HSID 不需要打接口：只要在任意 Google 站点走一遍正常登录，Set-Cookie 就会下发。
   const SITE_TARGETS = [
     {
-      key: 'gemini',
-      url: 'https://gemini.google.com/app',
-      host: 'gemini.google.com',
-      why: 'Gemini 应用页（拿 GAIA + at）',
-      probe: /SNlM0e\\?"\s*:/,
+      key: 'accounts',
+      // 登录入口专用：登录完成后 myaccount / play / one 的会话会一并建立，
+      // SID / HSID / LSID 也随之下发。不要用 myaccount.google.com 当打开地址 ——
+      // 未登录时它会 302 到 ServiceLogin，绕一圈还容易触发限流。
+      url: 'https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmyaccount.google.com%2F',
+      host: 'accounts.google.com',
+      label: 'Google 账号登录页',
+      why: '统一登录入口（获取 SID / HSID / SSID / SAPISID 与 accounts 域 LSID）',
+      probe: /@[a-z0-9.-]+\.[a-z]{2,}/i,
       autoOpen: true,
+      allowLoginPage: true,  // 它本身就是登录入口，rejectOpenReason 要放行
+      skipProbe: true,     // 它本身就是登录页，探测没有意义（会把登录页误判成未登录的死循环）
     },
     {
       key: 'play',
       url: 'https://play.google.com/store/account/subscriptions',
       host: 'play.google.com',
-      why: 'Play 订阅页（取消续费全靠这个域）',
+      label: 'Google Play 订阅页',
+      why: 'Play 订阅页（获取 play.google.com 域 OSID / __Secure-OSID，查订阅与自动取消必需）',
       probe: /SNlM0e\\?"\s*:/,
       autoOpen: true,
     },
@@ -88,22 +100,29 @@ const GoogleCreds = (() => {
       key: 'one',
       url: 'https://one.google.com/u/0/ai',
       host: 'one.google.com',
-      why: 'Google One 套餐页（购买意图 bTEHyc）',
+      label: 'Google One 套餐页',
+      why: 'Google One 套餐页（刷新 SIDCC 会话校验令牌与开通结算入口）',
       probe: /SNlM0e\\?"\s*:/,
       autoOpen: true,
     },
     {
-      key: 'accounts',
-      // 登录入口专用：登录完成后 myaccount / play / gemini 的会话会一并建立，
-      // SID / HSID 也随之下发。不要用 myaccount.google.com 当打开地址 ——
-      // 未登录时它会 302 到 ServiceLogin，绕一圈还容易触发限流。
-      url: 'https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmyaccount.google.com%2F',
-      host: 'accounts.google.com',
-      why: '统一登录入口（补 SID / HSID 与各域会话）',
-      probe: /@[a-z0-9.-]+\.[a-z]{2,}/i,
+      key: 'payments',
+      url: 'https://payments.google.com/gp/w/u/0/home/paymentmethods',
+      host: 'payments.google.com',
+      label: 'Google Payments 付款方式',
+      why: 'Google 付款中心（绑卡与解绑卡相关）',
+      probe: /payment|instrument|b3-/i,
       autoOpen: true,
-      allowLoginPage: true,  // 它本身就是登录入口，rejectOpenReason 要放行
-      skipProbe: true,     // 它本身就是登录页，探测没有意义（会把登录页误判成未登录的死循环）
+      skipProbe: true,
+    },
+    {
+      key: 'gemini',
+      url: 'https://gemini.google.com/app',
+      host: 'gemini.google.com',
+      label: 'Gemini 应用页',
+      why: 'Gemini 应用页（可选参考）',
+      probe: /SNlM0e\\?"\s*:/,
+      autoOpen: true,
     },
   ];
 
@@ -373,76 +392,122 @@ const GoogleCreds = (() => {
   function summarize(cookies, creds) {
     const hasSapisid = Boolean(creds.SAPISID || creds['__Secure-1PAPISID'] || creds['__Secure-3PAPISID']);
 
-    // 关键 cookie 逐项点名：这些缺任何一个，Python 侧都会掉进登录页。
+    // 关键 cookie 逐项点名：这些缺任何一个，Python 侧都会掉进登录页或无法结算。
     // 实测 play.google.com 少 SID+HSID 就只返回登录页（1.24MB 的 signin 页面）。
-    const nameSet = new Set(cookies.map(c => c.name));
+    const nonEmptyCookies = (cookies || []).filter(c => c && c.name && String(c.value || '').trim());
+    const nameSet = new Set(nonEmptyCookies.map(c => c.name));
     const criticalPresent = CRITICAL_COOKIE_NAMES.filter(n => nameSet.has(n));
     const criticalMissing = CRITICAL_COOKIE_NAMES.filter(n => !nameSet.has(n));
+    const hasSessionCheck = SESSION_CHECK_COOKIE_NAMES.some(n => nameSet.has(n));
     const missingStrongFields = STRONG_SESSION_NAMES.filter(name => !creds[name]);
     const hasStrong = missingStrongFields.length === 0;
     const hasShadowSession = Boolean(creds['__Secure-1PSID'] || creds['__Secure-3PSID']);
-    const buckets = classify(cookies);
+    const buckets = classify(nonEmptyCookies);
 
     // 哪些域需要拿到「登录态证据」——按域里有没有登录相关 cookie 判断，
-    // 不能只看「域里有没有 cookie」：OTZ / COMPASS / PLAY_ACTIVE_ACCOUNT 这类
-    // 遥测与指针 cookie 在未登录状态下也会存在，会把死会话误判成活的。
+    // 不能只看「域里有没有 cookie」：OTZ / COMPASS / PLAY_ACTIVE_ACCOUNT / ACCOUNT_CHOOSER
+    // 这类遥测或记忆指针在未登录状态下也会存在，会把死会话误判成活的。
     const SITE_EVIDENCE = {
       gemini: name => /^(?:__Secure-1PSID|__Secure-3PSID|SID|COMPASS)$/.test(name),
       play: name => /^(?:__Secure-OSID|OSID|SID|__Secure-1PSID)$/.test(name),
       one: name => /^(?:__Secure-OSID|OSID|SID|__Secure-1PSID)$/.test(name),
-      accounts: name => /^(?:LSID|SID|__Host-.*PLSID|ACCOUNT_CHOOSER)$/.test(name),
+      accounts: name => /^(?:LSID|SID|__Host-.*PLSID)$/.test(name),
+      payments: name => /^(?:__Secure-OSID|OSID|S)$/.test(name),
     };
-    const siteNames = { gemini: [], play: [], one: [], accounts: [] };
-    for (const c of cookies) {
+    const siteNames = { gemini: [], play: [], one: [], accounts: [], payments: [] };
+    for (const c of nonEmptyCookies) {
       const d = String(c.domain || '').replace(/^\./, '').toLowerCase();
       if (d.startsWith('gemini.google.com')) siteNames.gemini.push(c.name);
       else if (d.startsWith('play.google.com')) siteNames.play.push(c.name);
       else if (d.startsWith('one.google.com')) siteNames.one.push(c.name);
       else if (d.startsWith('accounts.google.com')) siteNames.accounts.push(c.name);
+      else if (d.startsWith('payments.google.com')) siteNames.payments.push(c.name);
     }
+    // 实测 HAR：one.google.com 依赖 .google.com 核心会话 + SIDCC，并不总是下发宿主级 OSID。
     const siteReady = {
       gemini: siteNames.gemini.some(SITE_EVIDENCE.gemini),
       play: siteNames.play.some(SITE_EVIDENCE.play),
-      one: siteNames.one.some(SITE_EVIDENCE.one),
+      one: siteNames.one.some(SITE_EVIDENCE.one) || (criticalMissing.length === 0 && hasSessionCheck),
       accounts: siteNames.accounts.some(SITE_EVIDENCE.accounts),
+      payments: siteNames.payments.some(SITE_EVIDENCE.payments)
+        || (criticalMissing.length === 0 && hasSessionCheck && nameSet.has('S')),
     };
 
-    // 缺什么就逐条说清楚，别笼统写 "SID+HSID+SSID"
-    const missing = [];
-    if (!hasSapisid) missing.push('SAPISID 或 __Secure-1PAPISID（缺了算不出 SAPISIDHASH）');
-    for (const name of missingStrongFields) missing.push(name);
-    if (!hasStrong && !hasShadowSession) missing.push('没有任何可用会话载体（SID / __Secure-*PSID）');
-    if (!siteReady.play) missing.push('play.google.com 登录态');
-    if (!siteReady.accounts) missing.push('accounts.google.com 登录态');
-    if (!siteReady.gemini) missing.push('gemini.google.com 登录态');
+    // 导出门禁：逐项点名缺失的 Cookie 与对应需要打开获取的域名（与服务端门禁一致）
+    const missingCookies = [];
+    const domainMissingMap = new Map();
+    const recordDomainMissing = (key, item) => {
+      if (!domainMissingMap.has(key)) domainMissingMap.set(key, []);
+      domainMissingMap.get(key).push(item);
+    };
 
-    // 哪些点位需要浏览器去补齐（用来触发自动打开）
-    const missingSites = [];
-    if (!siteReady.gemini) missingSites.push('gemini');
-    if (!siteReady.play) missingSites.push('play');
-    if (!siteReady.one) missingSites.push('one');
-    if (!siteReady.accounts || !hasStrong) missingSites.push('accounts');
+    for (const name of criticalMissing) {
+      missingCookies.push(name);
+      recordDomainMissing('accounts', name);
+    }
+    if (!siteReady.accounts) {
+      const label = 'accounts.google.com: LSID/__Host-1PLSID/__Host-3PLSID';
+      missingCookies.push(label);
+      recordDomainMissing('accounts', 'LSID/__Host-1PLSID/__Host-3PLSID');
+    }
+    if (!hasSessionCheck) {
+      const label = 'SIDCC/__Secure-1PSIDCC/__Secure-3PSIDCC';
+      missingCookies.push(label);
+      recordDomainMissing('one', label);
+    }
+    if (!siteReady.play) {
+      const label = 'play.google.com: OSID/__Secure-OSID';
+      missingCookies.push(label);
+      recordDomainMissing('play', 'OSID/__Secure-OSID');
+    }
+
+    const missingDomains = ['accounts', 'play', 'one']
+      .filter(key => domainMissingMap.has(key))
+      .map(key => {
+        const site = siteByKey(key) || { key, host: `${key}.google.com`, url: `https://${key}.google.com`, label: key, why: '' };
+        return {
+          key: site.key,
+          host: site.host,
+          url: site.url,
+          label: site.label || site.host,
+          why: site.why || '',
+          missing: domainMissingMap.get(key),
+        };
+      });
+
+    const missingSites = missingDomains.map(d => d.key);
+    const exportAllowed = missingCookies.length === 0;
+    const message = exportAllowed
+      ? ''
+      : `Cookie 不完整，暂不允许导出。缺少：${missingCookies.join('、')}。`
+        + `请先打开 ${missingDomains.map(d => `${d.host}（${d.url}）`).join('、')} 确认已登录后再重新获取。`;
 
     let verdict = 'invalid';
-    if (hasSapisid) verdict = hasStrong ? 'ok' : (hasShadowSession ? 'degraded' : 'invalid');
+    if (exportAllowed) verdict = 'ok';
+    else if (hasSapisid && (hasStrong || hasShadowSession)) verdict = 'incomplete';
 
     return {
-      total: cookies.length,
+      total: nonEmptyCookies.length,
       buckets,
       siteNames,
       siteReady,
       hasSapisid,
       hasStrong,
       hasShadowSession,
+      hasSessionCheck,
       missingStrongFields,
       criticalPresent,
       criticalMissing,
       canCancel: hasSapisid && siteReady.play && (hasStrong || hasShadowSession),
-      missing,
-      missingSites: [...new Set(missingSites)],
-      complete: missing.length === 0,
+      missing: missingCookies,
+      missingCookies,
+      missingDomains,
+      missingSites,
+      exportAllowed,
+      complete: exportAllowed,
       verdict,
-      chunked: cookies.filter(c => /^__Secure-.*session-token\.\d+$/.test(c.name)).length,
+      message,
+      chunked: nonEmptyCookies.filter(c => /^__Secure-.*session-token\.\d+$/.test(c.name)).length,
     };
   }
 
@@ -456,10 +521,28 @@ const GoogleCreds = (() => {
       throw new Error('当前扩展上下文未读到 Google Cookie。请检查扩展的 Google 网站访问权限，并确认插件与已登录页面位于同一浏览器配置文件；无痕窗口需单独允许扩展运行。');
     }
 
+    // 严格导出门禁：关键 Cookie 或核心站点会话不全时禁止导出，明确返回缺哪些 Cookie 及需打开哪些域名。
+    if (!summary.exportAllowed) {
+      return {
+        provider: 'google',
+        capturedAt: new Date().toISOString(),
+        purpose: 'google_one_subscription_cancel',
+        exportAllowed: false,
+        needsLogin: true,
+        summary,
+        missingCookies: summary.missingCookies,
+        missingDomains: summary.missingDomains,
+        missingSites: summary.missingSites,
+        message: summary.message,
+      };
+    }
+
     const payload = {
       provider: 'google',
       capturedAt: new Date().toISOString(),
       purpose: 'google_one_subscription_cancel',
+      exportAllowed: true,
+      needsLogin: false,
       summary,
       credentials: creds,
       cookieHeader: toCookieHeader(cookies),
@@ -1046,7 +1129,7 @@ const GoogleCreds = (() => {
     // 导出给测试用
     _internals: {
       toNetscape, toCookieHeader, toPythonLiteral, pickCredentials, classify, summarize, buildSetDetails,
-      DOMAIN_COOKIES, AUTH_CORE_NAMES, FLOW_MAIN_NAMES, CRITICAL_COOKIE_NAMES,
+      DOMAIN_COOKIES, AUTH_CORE_NAMES, FLOW_MAIN_NAMES, CRITICAL_COOKIE_NAMES, SESSION_CHECK_COOKIE_NAMES,
       __collectAllForTest: collectAll,
       SITE_TARGETS, NON_NAVIGABLE_PATTERNS, rejectOpenReason, siteByKey,
     },

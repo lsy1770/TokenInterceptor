@@ -305,6 +305,40 @@ button, input, textarea { font: inherit; color: inherit; }
 .site-list .site-note {
   color: var(--text-3);
   font: 500 10.5px/1.4 var(--mono);
+  word-break: break-all;
+}
+
+.site-list .site-item-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.site-list .site-open-btn {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.site-list .site-open-btn:hover {
+  border-color: var(--accent);
+}
+
+.missing-cookies-box {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: var(--r-sm, 6px);
+  background: rgba(var(--warning-rgb), 0.12);
+  color: var(--text);
+  font: 500 11px/1.5 var(--mono);
+  word-break: break-word;
 }
 
 /* Google One 面板：账号信息只读块 */

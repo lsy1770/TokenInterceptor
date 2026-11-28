@@ -750,65 +750,150 @@ $('googleProbe').addEventListener('click', () => { void probeGoogle(); });
 
 const SITE_LABELS = {
   gemini: 'Gemini',
-  play: 'Play 订阅页',
-  one: 'Google One',
-  accounts: '账号中心',
+  play: 'Play 订阅页 (play.google.com)',
+  one: 'Google One (one.google.com)',
+  payments: '付款中心 (payments.google.com)',
+  accounts: '账号中心 (accounts.google.com)',
 };
+
+const GOOGLE_EXPORT_BUTTON_IDS = [
+  'googleCopyTxt',
+  'googleSaveTxt',
+  'googleCopyHeader',
+  'googleCopyJson',
+  'googleCopyPython',
+];
 
 let googlePendingSites = [];
 
+function escapeHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function setGoogleExportEnabled(enabled) {
+  for (const id of GOOGLE_EXPORT_BUTTON_IDS) {
+    const el = $(id);
+    if (el) el.disabled = !enabled;
+  }
+}
+
+function clearGoogleExportOutputs() {
+  googleCaptureResult = null;
+  $('googleCookiesTxt').value = '';
+  $('googleCookieHeader').value = '';
+  $('googleCredsJSON').value = '';
+  $('googlePythonSnippet').value = '';
+  setGoogleExportEnabled(false);
+}
+
+function renderGoogleMissingGate(response) {
+  clearGoogleExportOutputs();
+  const panel = $('googleSitePanel');
+  const box = $('googleMissingCookies');
+  const list = $('googleSiteList');
+  const missingCookies = response.missingCookies || (response.summary && response.summary.missingCookies) || [];
+  const missingDomains = response.missingDomains || (response.summary && response.summary.missingDomains) || [];
+
+  panel.hidden = false;
+  if (missingCookies.length) {
+    box.hidden = false;
+    box.textContent = `缺少 Cookie（${missingCookies.length} 项）：${missingCookies.join('、')}`;
+  } else {
+    box.hidden = true;
+    box.textContent = '';
+  }
+
+  googlePendingSites = missingDomains.map(d => d.key);
+  $('googleSiteHint').textContent = missingDomains.length
+    ? `缺 ${missingCookies.length} 项 · 需打开 ${missingDomains.length} 个域名`
+    : 'Cookie 不完整，禁止导出';
+
+  list.innerHTML = missingDomains.map(domain => {
+    const label = escapeHtml(domain.label || SITE_LABELS[domain.key] || domain.host || domain.key);
+    const hostUrl = escapeHtml(domain.url || domain.host || '');
+    const need = escapeHtml((domain.missing || []).join('、'));
+    const key = escapeHtml(domain.key);
+    return `<li><span class="site-dot"></span>`
+      + `<div class="site-item-body">`
+      + `<span class="site-name">${label}</span>`
+      + `<span class="site-note">打开：${hostUrl}</span>`
+      + (need ? `<span class="site-note">补齐：${need}</span>` : '')
+      + `</div>`
+      + `<button class="site-open-btn" type="button" data-open-site-key="${key}">打开</button>`
+      + `</li>`;
+  }).join('');
+
+  setGoogleStatus('Cookie 不全（禁止导出）', 'warning');
+  $('googleExportStatus').textContent = response.message || 'Cookie 不完整，暂不允许导出';
+  showToast(response.message || 'Cookie 不完整，暂不允许导出');
+}
+
 function renderGoogleSites(sites, hintText) {
   const panel = $('googleSitePanel');
+  const box = $('googleMissingCookies');
   const list = $('googleSiteList');
   if (!sites || !sites.length) {
     panel.hidden = true;
+    box.hidden = true;
+    box.textContent = '';
     list.innerHTML = '';
     return;
   }
   panel.hidden = false;
+  box.hidden = true;
+  box.textContent = '';
   googlePendingSites = sites.filter(s => !s.ok).map(s => s.key);
   $('googleSiteHint').textContent = hintText
     || (googlePendingSites.length ? `${googlePendingSites.length} 个站点待登录` : '全部就绪');
   list.innerHTML = sites.map(site => {
     const ok = site && site.ok;
-    const label = SITE_LABELS[site.key] || site.key;
-    const note = site.hint || (site.error ? site.error : '');
+    const label = escapeHtml(SITE_LABELS[site.key] || site.key);
+    const note = escapeHtml(site.hint || (site.error ? site.error : ''));
     return `<li class="${ok ? 'ok' : ''}"><span class="site-dot"></span>`
-      + `<span class="site-name">${label}</span>`
-      + `<span class="site-note">${note}</span></li>`;
+      + `<div class="site-item-body"><span class="site-name">${label}</span>`
+      + `<span class="site-note">${note}</span></div></li>`;
   }).join('');
 }
+
+$('googleSiteList').addEventListener('click', async (event) => {
+  const btn = event.target.closest('[data-open-site-key]');
+  if (!btn) return;
+  const key = btn.getAttribute('data-open-site-key');
+  if (!key) return;
+  const response = await send('GOOGLE_OPEN_SITES', { sites: [key] });
+  if (!response.ok) return showToast(`打开失败：${response.error}`);
+  showToast(`已打开 ${SITE_LABELS[key] || key}`);
+});
 
 $('googleCapture').addEventListener('click', async () => {
   const button = $('googleCapture');
   setButtonBusy(button, true, '正在读取…', '一键取 Cookie');
-  $('googleExportStatus').textContent = '正在读取 google.com 域下的登录 Cookie…';
+  $('googleExportStatus').textContent = '正在检查 google.com 域下的关键 Cookie 完整性…';
   const response = await send('GOOGLE_CAPTURE_CREDENTIALS', {});
   setButtonBusy(button, false, '', '一键取 Cookie');
   if (!response.ok) {
+    clearGoogleExportOutputs();
     setGoogleStatus('导出失败', 'error');
     $('googleExportStatus').textContent = response.error || '导出失败';
     return;
   }
-  // Cookie 不全：先看实测结果，再把真正不通的站点打开
-  if (response.needsLogin) {
-    const probed = response.probedSites || [];
-    const opened = response.openedSites || [];
-    const rows = (probed.length ? probed : opened.map(s => ({
-      key: s.key,
-      ok: false,
-      hint: s.error ? `打开失败：${s.error}` : '已打开，请在该页面完成登录',
-    })));
-    renderGoogleSites(rows, '需要登录');
-    setGoogleStatus('Cookie 不完整', 'warning');
-    $('googleExportStatus').textContent = response.message || 'Cookie 不完整';
-    showToast(response.message || 'Cookie 不完整');
+  // 严格门禁：关键 Cookie 或站点会话不全时禁止导出，明确列出缺失项与待打开域名
+  if (response.needsLogin || response.exportAllowed === false) {
+    renderGoogleMissingGate(response);
     return;
   }
   await applyGoogleCapture(response);
 });
 
 async function applyGoogleCapture(response) {
+  if (!response || response.exportAllowed === false || !response.cookiesTxt) {
+    renderGoogleMissingGate(response || {});
+    return;
+  }
   googleCaptureResult = response;
   $('googleCookiesTxt').value = response.cookiesTxt || '';
   $('googleCookieHeader').value = response.cookieHeader || '';
@@ -821,18 +906,18 @@ async function applyGoogleCapture(response) {
     cookies: response.cookies
   }, null, 2);
   $('googlePythonSnippet').value = response.python || '';
+  setGoogleExportEnabled(true);
+  $('googleSitePanel').hidden = true;
+  $('googleMissingCookies').hidden = true;
+  googlePendingSites = [];
 
   const summary = response.summary || {};
   const bucketText = Object.entries(summary.buckets || {})
     .map(([key, names]) => `${key}:${names.length}`).join(' ');
-  const criticalMissing = summary.criticalMissing || [];
   $('googleExportStatus').textContent = [
     `共 ${summary.total || 0} 条 Cookie`,
-    `判定 ${summary.verdict || '?'}`,
+    '关键 Cookie 与站点会话齐全（可导出）',
     bucketText,
-    // 关键项缺了单独点出来：这些缺一个，Python 侧就会掉进登录页
-    criticalMissing.length ? `关键缺：${criticalMissing.join(' / ')}` : '关键项齐全',
-    summary.canCancel ? '可取消续费' : `缺：${(summary.missing || []).join(' / ')}`
   ].filter(Boolean).join(' · ');
 
   // PSIDTS 是否在导出前被刷新过（旧值会让脚本一跑就 302 到登录页）
@@ -841,76 +926,74 @@ async function applyGoogleCapture(response) {
     $('googleExportStatus').textContent += ` · 已刷新 ${refresh.rotated.join('/')}`;
   }
 
-  setGoogleStatus(summary.canCancel && !criticalMissing.length ? '已导出' : '部分可用',
-    summary.canCancel && !criticalMissing.length ? 'ok' : 'warning');
+  setGoogleStatus('齐全 · 可导出', 'ok');
   renderGoogleReadout({
     hasSapisid: summary.hasSapisid,
     hasStrong: summary.hasStrong,
     loggedIn: true
   });
-  showToast(`已取到 ${summary.total || 0} 条 Google Cookie`);
+  showToast(`已校验齐全并取到 ${summary.total || 0} 条 Google Cookie`);
 }
 
 $('googleRetryCapture').addEventListener('click', async () => {
   const button = $('googleRetryCapture');
-  setButtonBusy(button, true, '正在核对…', '我已登录，继续取 Cookie');
-  // force=true：绕过 60s 缓存，按标签页真实状态重新判一次
-  const probe = await send('GOOGLE_PROBE_SITES', { reset: true });
-  if (probe.ok) renderGoogleSites(probe.sites, undefined);
+  setButtonBusy(button, true, '正在核对…', '我已登录，重新检查');
   const response = await send('GOOGLE_CAPTURE_CREDENTIALS', {
     retried: true,
     force: true,
-    autoComplete: true,
   });
-  setButtonBusy(button, false, '', '我已登录，继续取 Cookie');
+  setButtonBusy(button, false, '', '我已登录，重新检查');
   if (!response.ok) {
+    clearGoogleExportOutputs();
     $('googleExportStatus').textContent = response.error || '仍然取不到 Cookie';
     setGoogleStatus('导出失败', 'error');
     return;
   }
-  if (response.needsLogin) {
-    const rows = (response.probedSites || []).map(s => ({ key: s.key, ok: s.ok, hint: s.hint }));
-    renderGoogleSites(rows, '需要登录');
-    setGoogleStatus('仍未就绪', 'warning');
-    $('googleExportStatus').textContent = response.message || '仍未就绪';
-    showToast(response.message || '仍未就绪');
+  if (response.needsLogin || response.exportAllowed === false) {
+    renderGoogleMissingGate(response);
     return;
   }
   await applyGoogleCapture(response);
-  const rows = (response.probedSites || []).map(s => ({ key: s.key, ok: s.ok, hint: s.hint }));
-  renderGoogleSites(rows, rows.length ? '全部就绪' : undefined);
   document.querySelector('[data-google-tab="export"]').click();
 });
 
 $('googleOpenMissing').addEventListener('click', async () => {
-  const keys = googlePendingSites.length ? googlePendingSites : ['gemini', 'play', 'one', 'accounts'];
+  const keys = googlePendingSites.length ? googlePendingSites : ['accounts', 'play', 'one'];
   const response = await send('GOOGLE_OPEN_SITES', { sites: keys });
   if (!response.ok) return showToast(`打开失败：${response.error}`);
-  showToast(`已打开 ${response.opened.length} 个站点`);
+  showToast(`已打开 ${response.opened.length} 个缺失域名`);
 });
 
+function requireGoogleExportReady() {
+  if (!googleCaptureResult || !googleCaptureResult.exportAllowed || !$('googleCookiesTxt').value) {
+    showToast('Cookie 不完整，补齐后才允许导出');
+    return false;
+  }
+  return true;
+}
+
 $('googleCopyTxt').addEventListener('click', () => {
-  if (!$('googleCookiesTxt').value) return showToast('先点「一键取 Cookie」');
+  if (!requireGoogleExportReady()) return;
   void copyText($('googleCookiesTxt').value, 'cookies.txt 已复制');
 });
 
 $('googleCopyHeader').addEventListener('click', () => {
-  if (!$('googleCookieHeader').value) return showToast('先点「一键取 Cookie」');
+  if (!requireGoogleExportReady()) return;
   void copyText($('googleCookieHeader').value, 'Cookie Header 已复制');
 });
 
 $('googleCopyJson').addEventListener('click', () => {
-  if (!$('googleCredsJSON').value) return showToast('先点「一键取 Cookie」');
+  if (!requireGoogleExportReady()) return;
   void copyText($('googleCredsJSON').value, 'JSON 已复制');
 });
 
 $('googleCopyPython').addEventListener('click', () => {
-  if (!$('googlePythonSnippet').value) return showToast('先点「一键取 Cookie」');
+  if (!requireGoogleExportReady()) return;
   void copyText($('googlePythonSnippet').value, 'Python 片段已复制');
 });
 
 $('googleSaveTxt').addEventListener('click', () => {
-  if (!googleCaptureResult || !googleCaptureResult.cookiesTxt) return showToast('先点「一键取 Cookie」');
+  if (!requireGoogleExportReady()) return;
   download(googleCaptureResult.cookiesTxt, `google_cookies_${Date.now()}.txt`, 'text/plain');
 });
 

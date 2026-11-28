@@ -1377,7 +1377,7 @@ async function run(msg, sender) {
 
     // 主动打开缺的站点
     case 'GOOGLE_OPEN_SITES': {
-      const opened = await GoogleCreds.openSites(msg.sites || ['gemini', 'play', 'one', 'accounts']);
+      const opened = await GoogleCreds.openSites(msg.sites || ['accounts', 'play', 'one']);
       return { ok: true, opened };
     }
 

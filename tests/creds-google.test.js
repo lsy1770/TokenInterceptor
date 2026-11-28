@@ -47,34 +47,46 @@ assert.ok(buckets.play.includes('PLAY_ACTIVITY_TOKEN'));
 assert.ok(buckets.accounts.includes('__Host-GAPS'));
 assert.ok(buckets.one.includes('OSID'));
 
-// ---- summarize：能不能取消订阅 ----
+// ---- summarize：导出门禁与缺失提示 ----
 const good = summarize(sample, creds);
 assert.equal(good.hasSapisid, true);
 assert.equal(good.hasStrong, true);
 assert.equal(good.hasShadowSession, false);
-assert.equal(good.verdict, 'ok');
-// canCancel 现在要求 play 域有「登录态证据」，sample 里 play 只有 PLAY_ACTIVITY_TOKEN（不是会话）
+// sample 缺少 __Secure-1PSID/__Secure-3PSID/__Secure-1PAPISID/__Secure-3PAPISID/APISID/SIDCC 和 play/accounts 登录态
+assert.equal(good.verdict, 'incomplete');
 assert.equal(good.siteReady.play, false, 'PLAY_ACTIVITY_TOKEN 不算 play 登录态');
 assert.equal(good.canCancel, false);
 assert.equal(good.complete, false);
+assert.equal(good.exportAllowed, false);
 
-const fullSites = summarize(
-  sample.concat([
-    cookie({ domain: 'play.google.com', name: '__Secure-OSID', value: 'o', hostOnly: true }),
-    cookie({ domain: 'gemini.google.com', name: 'COMPASS', value: 'c', hostOnly: true }),
-    cookie({ domain: 'one.google.com', name: '__Secure-OSID', value: 'o', hostOnly: true }),
-    cookie({ domain: 'accounts.google.com', name: 'LSID', value: 'l', hostOnly: true }),
-  ]),
-  creds
-);
+const fullSample = [
+  cookie({ domain: '.google.com', name: 'SID', value: 'sid-value' }),
+  cookie({ domain: '.google.com', name: 'HSID', value: 'hsid-value' }),
+  cookie({ domain: '.google.com', name: 'SSID', value: 'ssid-value' }),
+  cookie({ domain: '.google.com', name: 'APISID', value: 'apisid-value' }),
+  cookie({ domain: '.google.com', name: 'SAPISID', value: 'sapisid-value' }),
+  cookie({ domain: '.google.com', name: '__Secure-1PSID', value: '1psid-value' }),
+  cookie({ domain: '.google.com', name: '__Secure-3PSID', value: '3psid-value' }),
+  cookie({ domain: '.google.com', name: '__Secure-1PAPISID', value: '1papisid-value' }),
+  cookie({ domain: '.google.com', name: '__Secure-3PAPISID', value: '3papisid-value' }),
+  cookie({ domain: '.google.com', name: 'SIDCC', value: 'sidcc-value' }),
+  cookie({ domain: 'play.google.com', name: '__Secure-OSID', value: 'o', hostOnly: true }),
+  cookie({ domain: 'accounts.google.com', name: 'LSID', value: 'l', hostOnly: true }),
+];
+const fullSites = summarize(fullSample, pickCredentials(fullSample));
 assert.equal(fullSites.siteReady.play, true);
+assert.equal(fullSites.siteReady.accounts, true);
+assert.equal(fullSites.siteReady.one, true, '核心会话 + SIDCC 齐备时 one.google.com 可用');
 assert.equal(fullSites.canCancel, true);
 assert.deepEqual(fullSites.missingSites, []);
+assert.deepEqual(fullSites.missingCookies, []);
+assert.equal(fullSites.exportAllowed, true);
 assert.equal(fullSites.complete, true);
+assert.equal(fullSites.verdict, 'ok');
 
 // 关键回归：域里有 cookie 不等于「该域登录了」。
-// 用户真实情况 —— play 只有 OSID/OTZ/PLAY_ACTIVE_ACCOUNT 这类非会话 cookie，
-// 旧逻辑会误判为就绪；新逻辑必须判出 play 未就绪。
+// 用户真实情况 —— play 只有 OTZ/PLAY_ACTIVE_ACCOUNT 这类非会话 cookie，
+// 旧逻辑会误判为就绪；新逻辑必须判出 play 未就绪且禁止导出。
 const deadSession = summarize([
   cookie({ name: 'SAPISID', value: 's' }),
   cookie({ name: '__Secure-1PSID', value: 'p' }),
@@ -85,22 +97,26 @@ const deadSession = summarize([
 assert.equal(deadSession.siteReady.play, false, 'OTZ/PLAY_ACTIVE_ACCOUNT 不能证明 play 已登录');
 assert.ok(deadSession.missingSites.includes('play'), 'play 未就绪必须进 missingSites');
 assert.equal(deadSession.canCancel, false);
+assert.equal(deadSession.exportAllowed, false);
 
-const noPlay = summarize(sample.filter(c => c.domain !== 'play.google.com'), creds);
+const noPlay = summarize(fullSample.filter(c => c.domain !== 'play.google.com'), pickCredentials(fullSample));
 assert.equal(noPlay.canCancel, false);
-assert.ok(noPlay.missing.some(m => /play\.google\.com/.test(m)));
+assert.equal(noPlay.exportAllowed, false);
+assert.ok(noPlay.missingCookies.some(m => /play\.google\.com/.test(m)));
+assert.ok(noPlay.missingDomains.some(d => d.key === 'play' && d.url.includes('play.google.com')));
 assert.ok(noPlay.missingSites.includes('play'));
 
 // 缺字段要逐项报，不许含糊成 "SID+HSID+SSID"
-const noHsidCreds = pickCredentials(sample.filter(c => c.name !== 'HSID'));
-const noHsid = summarize(sample.filter(c => c.name !== 'HSID'), noHsidCreds);
+const noHsidCookies = fullSample.filter(c => c.name !== 'HSID');
+const noHsid = summarize(noHsidCookies, pickCredentials(noHsidCookies));
 assert.equal(noHsid.hasStrong, false);
 assert.deepEqual(noHsid.missingStrongFields, ['HSID']);
 assert.ok(noHsid.missing.includes('HSID'), '必须点名 HSID');
 assert.ok(!noHsid.missing.includes('SID+HSID+SSID'), '不许再用笼统写法');
-assert.equal(noHsid.verdict, 'invalid', '既无强会话也无影子会话 → invalid');
+assert.equal(noHsid.exportAllowed, false, '缺 HSID 禁止导出');
+assert.ok(noHsid.missingDomains.some(d => d.key === 'accounts'), '缺 HSID 必须提示打开 accounts.google.com');
 
-// 只有影子会话（真实账号常见）：degraded，但 canCancel 仍可为真
+// 只有影子会话但缺 SID/HSID/SSID：禁止导出（incomplete）
 const shadowCookies = [
   cookie({ name: 'SAPISID', value: 's' }),
   cookie({ name: '__Secure-1PSID', value: 'p1' }),
@@ -109,8 +125,8 @@ const shadowCookies = [
 const shadowed = summarize(shadowCookies, pickCredentials(shadowCookies));
 assert.equal(shadowed.hasStrong, false);
 assert.equal(shadowed.hasShadowSession, true);
-assert.equal(shadowed.verdict, 'degraded');
-assert.equal(shadowed.canCancel, true, '有影子会话 + play 登录态即可取消');
+assert.equal(shadowed.verdict, 'incomplete');
+assert.equal(shadowed.exportAllowed, false, '缺少核心强会话字段时禁止导出');
 assert.deepEqual(shadowed.missingStrongFields, ['SID', 'HSID', 'SSID']);
 
 // 没有 SAPISID 直接 invalid
@@ -216,7 +232,7 @@ assert.ok(GoogleCreds._internals.AUTH_CORE_NAMES.includes('SAPISID'));
 // ---- 站点表：只能放「能当页面打开」的地址 ----
 const { SITE_TARGETS, rejectOpenReason } = GoogleCreds._internals;
 
-assert.equal(SITE_TARGETS.length, 4);
+assert.equal(SITE_TARGETS.length, 5);
 for (const site of SITE_TARGETS) {
   // accounts 点位是登录入口，需要 allowLoginPage 才放行
   assert.equal(rejectOpenReason(site.url, { allowLoginPage: site.allowLoginPage === true }), '',
@@ -313,20 +329,11 @@ for (const name of ['SID', 'HSID', 'APISID', 'SAPISID', '__Secure-1PSID']) {
   assert.ok(CRITICAL.includes(name), `关键 cookie ${name} 必须被单独兜底抓取`);
 }
 
-// 有 SID+HSID 时 verdict 必须是 ok（这是 Play 可用的前提）
-const withStrong = summarize([
-  cookie({ name: 'SID', value: 's' }),
-  cookie({ name: 'HSID', value: 'h' }),
-  cookie({ name: 'SSID', value: 'x' }),
-  cookie({ name: 'SAPISID', value: 'a' }),
-], pickCredentials([
-  cookie({ name: 'SID', value: 's' }),
-  cookie({ name: 'HSID', value: 'h' }),
-  cookie({ name: 'SSID', value: 'x' }),
-  cookie({ name: 'SAPISID', value: 'a' }),
-]));
-assert.equal(withStrong.verdict, 'ok');
-assert.equal(withStrong.hasStrong, true);
-assert.deepEqual(withStrong.missingStrongFields, []);
+// 完整核心会话 + SIDCC + play + accounts 时 verdict 必须是 ok 且允许导出
+const withFull = summarize(fullSample, pickCredentials(fullSample));
+assert.equal(withFull.verdict, 'ok');
+assert.equal(withFull.hasStrong, true);
+assert.equal(withFull.exportAllowed, true);
+assert.deepEqual(withFull.missingStrongFields, []);
 
 console.log('creds-google tests passed');

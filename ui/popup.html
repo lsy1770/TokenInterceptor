@@ -315,17 +315,18 @@
             </div>
             <span class="status-pill"><i></i><span id="googleStatus">就绪</span></span>
           </div>
-          <p class="section-description">一键导出「取消订阅 / 开通」所需的最小 Cookie 集，或把 Cookie 注入当前浏览器直接登录该账号。Cookie 不全时会自动打开对应网站补全会话。</p>
+          <p class="section-description">一键导出「开通 / 查订阅 / 取消续费 / 删卡」所需的完整 Google Cookie，或注入到当前浏览器登录。关键 Cookie 不齐全时禁止导出，并提示缺少的 Cookie 与需打开的域名。</p>
           <div class="button-row compact">
             <button id="googleCapture" class="button button-primary" type="button">一键取 Cookie</button>
             <button id="googleProbe" class="button button-secondary" type="button">检测当前账号</button>
           </div>
           <div id="googleSitePanel" class="site-panel" hidden>
-            <div class="field-label"><span>站点登录态</span><span id="googleSiteHint">需要登录</span></div>
+            <div class="field-label"><span>缺少的 Cookie 与待打开域名</span><span id="googleSiteHint">禁止导出</span></div>
+            <div id="googleMissingCookies" class="missing-cookies-box" hidden></div>
             <ul id="googleSiteList" class="site-list"></ul>
             <div class="button-row compact">
-              <button id="googleRetryCapture" class="button button-primary" type="button">我已登录，继续取 Cookie</button>
-              <button id="googleOpenMissing" class="button button-secondary" type="button">再打开缺失站点</button>
+              <button id="googleRetryCapture" class="button button-primary" type="button">我已登录，重新检查</button>
+              <button id="googleOpenMissing" class="button button-secondary" type="button">打开缺失域名</button>
             </div>
           </div>
           <div class="google-readout" id="googleReadout" hidden>
@@ -344,17 +345,17 @@
           <section class="form-panel">
             <label class="field"><span>Netscape cookies.txt（直接喂给 google_one_daichong.py --cookie-file）</span><textarea id="googleCookiesTxt" rows="7" readonly placeholder="点击「一键取 Cookie」后显示…" spellcheck="false"></textarea></label>
             <div class="button-row compact">
-              <button id="googleCopyTxt" class="button button-secondary" type="button">复制 cookies.txt</button>
-              <button id="googleSaveTxt" class="button button-primary" type="button">下载 cookies.txt</button>
+              <button id="googleCopyTxt" class="button button-secondary" type="button" disabled>复制 cookies.txt</button>
+              <button id="googleSaveTxt" class="button button-primary" type="button" disabled>下载 cookies.txt</button>
             </div>
             <div class="divider"><span>其它格式</span></div>
             <label class="field"><span>Cookie Header 串</span><textarea id="googleCookieHeader" rows="3" readonly spellcheck="false"></textarea></label>
             <label class="field"><span>导出 JSON（完整 cookie 数组 + 元信息）</span><textarea id="googleCredsJSON" rows="5" readonly spellcheck="false"></textarea></label>
             <label class="field"><span>Python 直贴片段</span><textarea id="googlePythonSnippet" rows="5" readonly spellcheck="false"></textarea></label>
             <div class="button-row">
-              <button id="googleCopyHeader" class="button button-secondary" type="button">复制 Header</button>
-              <button id="googleCopyJson" class="button button-secondary" type="button">复制 JSON</button>
-              <button id="googleCopyPython" class="button button-secondary" type="button">复制 Python</button>
+              <button id="googleCopyHeader" class="button button-secondary" type="button" disabled>复制 Header</button>
+              <button id="googleCopyJson" class="button button-secondary" type="button" disabled>复制 JSON</button>
+              <button id="googleCopyPython" class="button button-secondary" type="button" disabled>复制 Python</button>
             </div>
             <p id="googleExportStatus" class="inline-status"></p>
           </section>
