@@ -2,6 +2,14 @@
 
 All notable changes are documented here. Versions follow Semantic Versioning where practical.
 
+## 4.5.0
+
+### Changed
+
+- **Google One / Gemini Cookie 严格导出门禁**：一键取 Cookie 新增完整性强校验，必须齐全 9 项核心登录与签名 Cookie（`SID`、`HSID`、`SSID`、`APISID`、`SAPISID`、`__Secure-1PSID`、`__Secure-3PSID`、`__Secure-1PAPISID`、`__Secure-3PAPISID`）、会话校验令牌（`SIDCC` / `__Secure-1PSIDCC` / `__Secure-3PSIDCC`）、`play.google.com` 域会话（`OSID` / `__Secure-OSID`）以及 `accounts.google.com` 域会话（`LSID` / `__Host-1PLSID` / `__Host-3PLSID`）才允许导出。
+- **缺失提示与域名快捷补齐**：Cookie 不齐全时清空导出区并禁用全部复制/下载按钮，明确逐项列出缺少的 Cookie，并展示需打开补齐的域名（`accounts.google.com`、`play.google.com`、`one.google.com`）及逐个/批量一键打开按钮。
+- 移除已退出登录仍可能残留的 `ACCOUNT_CHOOSER` 误判，避免把失效账号判为就绪。
+
 ## 4.4.0
 
 ### Added

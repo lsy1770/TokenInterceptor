@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "openai/claude Token Interceptor",
-  "version": "4.4.0",
+  "version": "4.5.0",
   "description": "在浏览器中发起 OpenAI、Claude 和 Antigravity OAuth 并捕获 Token",
   "permissions": [
     "storage",
